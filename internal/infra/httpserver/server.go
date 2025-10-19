@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/yourorg/ai-telebot/internal/infra/config"
+	"unitool/internal/infra/config"
 )
 
 type Handler interface{ http.Handler }
@@ -28,10 +28,6 @@ func New(cfg config.Config, bot Handler) *http.Server {
 		_, _ = w.Write([]byte("ok"))
 	})
 	r.Handle("/metrics", promhttp.Handler())
-
-	r.Route("/api/v1", func(r chi.Router) {
-  	  r.Mount("/payments", paymentsHandler) // см. ниже
-	})
 
 	r.Mount("/tg", bot)
 

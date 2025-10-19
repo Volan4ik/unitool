@@ -2,16 +2,13 @@ package pg
 
 import (
 	"context"
-	"embed"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"unitool/migrations"
 )
-
-//go:embed ../../../migrations/*.sql
-var fs embed.FS
 
 // MigrateAll executes all embedded *.sql in name order, tracking progress in schema_migrations.
 func MigrateAll(ctx context.Context, db *DB) error {
@@ -25,7 +22,7 @@ func MigrateAll(ctx context.Context, db *DB) error {
 		return fmt.Errorf("schema_migrations: %w", err)
 	}
 
-	entries, err := fs.ReadDir("migrations")
+	entries, err := migrations.Files.ReadDir(".")
 	if err != nil {
 		return fmt.Errorf("read migrations dir: %w", err)
 	}
@@ -45,7 +42,7 @@ func MigrateAll(ctx context.Context, db *DB) error {
 		if exists {
 			continue
 		}
-		sqlBytes, err := fs.ReadFile("migrations/" + name)
+		sqlBytes, err := migrations.Files.ReadFile(name)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", name, err)
 		}

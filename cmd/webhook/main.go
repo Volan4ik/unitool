@@ -2,23 +2,21 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
 
-	"github.com/yourorg/ai-telebot/internal/bot/telegram"
-	"github.com/yourorg/ai-telebot/internal/infra/config"
-	"github.com/yourorg/ai-telebot/internal/infra/httpserver"
-	"github.com/yourorg/ai-telebot/internal/infra/logger"
-	"github.com/yourorg/ai-telebot/internal/infra/pg"
-	"github.com/yourorg/ai-telebot/internal/infra/yookassa"
-	"github.com/yourorg/ai-telebot/internal/usecase"
+	"unitool/internal/bot/telegram"
+	"unitool/internal/infra/config"
+	"unitool/internal/infra/httpserver"
+	"unitool/internal/infra/logger"
+	"unitool/internal/infra/pg"
+	"unitool/internal/infra/yookassa"
+	"unitool/internal/usecase"
 )
 
 func main() {
@@ -35,7 +33,7 @@ func main() {
 	defer db.Close()
 
 	// Run migrations on start if enabled (recommended for initContainer or simple deploys)
-	if v, _ := strconv.Atoi(os.Getenv("MIGRATE_ON_START")); v == 1 {
+	if cfg.MigrateOnStart {
 		if err := pg.MigrateAll(ctx, db); err != nil {
 			lg.Fatalf("migrate: %v", err)
 		}
@@ -43,15 +41,17 @@ func main() {
 
 	// repos
 	usersRepo := pg.NewUserRepo(db)
-	paymentsRepo := pg.NewPaymentsRepo(db)
+	packagesRepo := pg.NewPackagesRepo(db)
+	ordersRepo := pg.NewOrdersRepo(db)
+	ledgerRepo := pg.NewLedgerRepo(db)
 
 	// usecases
 	botUC := usecase.NewBotUsecase(cfg.BotToken, lg)
-	botUC.WithUsers(usersRepo, cfg.DefaultFreeTries)
+	botUC.WithUsers(usersRepo)
 
 	// YooKassa client + payments usecase
-	yk := yookassa.New(os.Getenv("YOOKASSA_SHOP_ID"), os.Getenv("YOOKASSA_SECRET"))
-	payUC := usecase.NewPaymentsUC(paymentsRepo, usersRepo, yk, os.Getenv("RETURN_URL"))
+	yk := yookassa.New(cfg.YookassaShopID, cfg.YookassaSecret)
+	payUC := usecase.NewPaymentsUC(packagesRepo, ordersRepo, ledgerRepo, usersRepo, yk, cfg.ReturnURL)
 
 	// transport (Telegram webhook handler с поддержкой /buy)
 	h := telegram.NewHandler(botUC, payUC, lg)

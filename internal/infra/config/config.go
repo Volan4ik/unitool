@@ -2,24 +2,30 @@ package config
 
 import (
 	"os"
-	"strconv"
+	"strings"
 )
 
 type Config struct {
-	Port             string
-	BotToken         string
-	PublicBaseURL    string
-	DatabaseURL      string
-	DefaultFreeTries int
+	Port           string
+	BotToken       string
+	PublicBaseURL  string
+	DatabaseURL    string
+	ReturnURL      string
+	YookassaShopID string
+	YookassaSecret string
+	MigrateOnStart bool
 }
 
 func Load() Config {
 	return Config{
-		Port:             getEnv("PORT", "8080"),
-		BotToken:         mustEnv("BOT_TOKEN"),
-		PublicBaseURL:    getEnv("PUBLIC_BASE_URL", "http://localhost:8080"),
-		DatabaseURL:      mustEnv("DATABASE_URL"),
-		DefaultFreeTries: getEnvInt("FREE_TRIES", 3),
+		Port:           getEnv("PORT", "8080"),
+		BotToken:       mustEnv("BOT_TOKEN"),
+		PublicBaseURL:  getEnv("PUBLIC_BASE_URL", "http://localhost:8080"),
+		DatabaseURL:    mustEnv("DATABASE_URL"),
+		ReturnURL:      getEnv("RETURN_URL", ""),
+		YookassaShopID: getEnv("YOOKASSA_SHOP_ID", ""),
+		YookassaSecret: getEnv("YOOKASSA_SECRET", ""),
+		MigrateOnStart: getEnvBool("MIGRATE_ON_START"),
 	}
 }
 
@@ -38,11 +44,15 @@ func getEnv(k, def string) string {
 	return def
 }
 
-func getEnvInt(k string, def int) int {
-	if v := os.Getenv(k); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
+func getEnvBool(k string) bool {
+	v := os.Getenv(k)
+	if v == "" {
+		return false
 	}
-	return def
+	switch strings.ToLower(v) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
