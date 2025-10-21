@@ -1,233 +1,293 @@
--- schema.sql
--- Полная структура БД (DDL) для ai-telebot с YooKassa.
--- Применение: psql <db> -f migrations/schema.sql
+-- =====================================================================
+--  Neural Bot – DB Schema (PostgreSQL 14+)
+--  Согласие по фото/видео объединено: users.media_agreed
+-- =====================================================================
 
-BEGIN;
+-- Extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS citext;
 
--- ========== EXTENSIONS ==========
-CREATE EXTENSION IF NOT EXISTS pgcrypto;           -- gen_random_uuid()
-CREATE EXTENSION IF NOT EXISTS pg_stat_statements; -- профилирование запросов
-
--- ========== ENUM TYPES ==========
+-- ---------------------------------------------------------------------
+-- Types
+-- ---------------------------------------------------------------------
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'gen_type') THEN
     CREATE TYPE gen_type AS ENUM ('text','image','video','search');
   END IF;
 
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'job_status') THEN
-    CREATE TYPE job_status AS ENUM ('queued','running','succeeded','failed','cancelled','timeout');
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_status') THEN
+    CREATE TYPE order_status AS ENUM ('created','precheckout_ok','paid','failed','refunded');
   END IF;
 
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_status') THEN
-    CREATE TYPE payment_status AS ENUM ('pending','authorized','paid','failed','refunded','cancelled');
-  END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'provider_kind') THEN
-    CREATE TYPE provider_kind AS ENUM ('openai','anthropic','google','bytedance','alibaba','perplexity','custom');
-  END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ledger_op') THEN
-    CREATE TYPE ledger_op AS ENUM ('grant_paid','spend_paid','spend_free','adjustment');
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ledger_reason') THEN
+    CREATE TYPE ledger_reason AS ENUM ('purchase','admin_grant','refund','monthly_free','spend');
   END IF;
 END$$;
 
--- ========== USERS ==========
-CREATE TABLE IF NOT EXISTS users (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tg_user_id   BIGINT UNIQUE NOT NULL,        -- Telegram ID — главный идентификатор
-  username     TEXT,
-  is_admin     BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_seen_at TIMESTAMPTZ
-);
-CREATE INDEX IF NOT EXISTS users_tg_idx ON users(tg_user_id);
-
--- ========== AI MODELS ==========
-CREATE TABLE IF NOT EXISTS ai_models (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  provider     provider_kind NOT NULL,
-  model_code   TEXT NOT NULL,         -- 'gpt-4o-mini','gemini-1.5-pro',...
-  gen          gen_type NOT NULL,     -- text/image/video/search
-  max_input    INTEGER,
-  max_output   INTEGER,
-  price_meta   JSONB NOT NULL DEFAULT '{}'::jsonb,
-  enabled      BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (provider, model_code)
-);
-CREATE INDEX IF NOT EXISTS ai_models_gen_idx ON ai_models(gen, enabled);
-ALTER TABLE ai_models
-  ADD CONSTRAINT IF NOT EXISTS ai_models_price_meta_max CHECK (pg_column_size(price_meta) <= 32768);
-
--- ========== PACKAGES ==========
-CREATE TABLE IF NOT EXISTS packages (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  code         TEXT UNIQUE NOT NULL,
-  name         TEXT NOT NULL,
-  description  TEXT,
-  items_json   JSONB NOT NULL,        -- {"text":10,"image":5,"video":5,"search":0}
-  price_rub    NUMERIC(12,2) NOT NULL,
-  currency     TEXT NOT NULL DEFAULT 'RUB',
-  active       BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (jsonb_typeof(items_json) = 'object')
-);
--- Ограничения на размер и корректность items_json
-ALTER TABLE packages
-  ADD CONSTRAINT IF NOT EXISTS packages_items_json_max CHECK (pg_column_size(items_json) <= 8192),
-  ADD CONSTRAINT IF NOT EXISTS packages_items_json_keys CHECK (
-    (SELECT COALESCE(bool_and(k IN ('text','image','video','search')), TRUE)
-     FROM jsonb_object_keys(items_json) AS k)
-  ),
-  ADD CONSTRAINT IF NOT EXISTS packages_items_json_values CHECK (
-    (SELECT COALESCE(bool_and( (v)::text ~ '^[0-9]+$' AND ((v)::text)::int >= 0 ), TRUE)
-     FROM jsonb_each(items_json) AS e(k, v))
-  );
-
--- ========== ORDERS (YooKassa интеграция) ==========
-CREATE TABLE IF NOT EXISTS orders (
-  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  package_id       UUID NOT NULL REFERENCES packages(id) ON DELETE RESTRICT,
-  status           payment_status NOT NULL DEFAULT 'pending',
-  amount_rub       NUMERIC(12,2) NOT NULL,
-  currency         TEXT NOT NULL DEFAULT 'RUB',
-  provider         TEXT NOT NULL DEFAULT 'yookassa',      -- YooKassa
-  provider_tx_id   TEXT,                                   -- id платежа из YooKassa
-  idempotence_key  TEXT,                                   -- ключ идемпотентности
-  payment_method   TEXT,                                   -- bank_card, sbp, ...
-  confirmation_url TEXT,                                   -- ссылка подтверждения
-  test_mode        BOOLEAN DEFAULT FALSE,                  -- тестовый платёж
-  receipt          JSONB,                                  -- чек (если используется)
-  payment_meta     JSONB NOT NULL DEFAULT '{}'::jsonb,     -- сырые вебхуки/ответы
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  paid_at          TIMESTAMPTZ
-);
--- Денежные и JSON ограничения
-ALTER TABLE orders
-  ADD CONSTRAINT IF NOT EXISTS orders_amount_nonneg CHECK (amount_rub >= 0),
-  ADD CONSTRAINT IF NOT EXISTS orders_payment_meta_max CHECK (pg_column_size(payment_meta) <= 65536),
-  ADD CONSTRAINT IF NOT EXISTS orders_receipt_max      CHECK (receipt IS NULL OR pg_column_size(receipt) <= 65536);
-
--- Индексы и идемпотентность
-CREATE INDEX IF NOT EXISTS orders_user_status_idx ON orders(user_id, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS orders_paid_idx ON orders(paid_at DESC) WHERE status = 'paid';
-CREATE UNIQUE INDEX IF NOT EXISTS orders_provider_tx_uidx ON orders(provider, provider_tx_id)
-  WHERE provider_tx_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS orders_idempotence_uidx ON orders(idempotence_key)
-  WHERE idempotence_key IS NOT NULL;
-
--- Триггер: нельзя купить неактивный пакет
-CREATE OR REPLACE FUNCTION orders_enforce_active_package()
-RETURNS trigger LANGUAGE plpgsql AS $$
+-- ---------------------------------------------------------------------
+-- Utility: updated_at trigger
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS trigger AS $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM packages p WHERE p.id = NEW.package_id AND p.active) THEN
-    RAISE EXCEPTION 'Package % is inactive', NEW.package_id;
-  END IF;
+  NEW.updated_at := now();
   RETURN NEW;
-END$$;
-DROP TRIGGER IF EXISTS trg_orders_active_package ON orders;
-CREATE TRIGGER trg_orders_active_package
-BEFORE INSERT ON orders
-FOR EACH ROW EXECUTE FUNCTION orders_enforce_active_package();
+END$$ LANGUAGE plpgsql;
 
--- Триггер: валидные переходы статусов платежа
-CREATE OR REPLACE FUNCTION orders_validate_status_transition()
-RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE
-  old_status payment_status := COALESCE(OLD.status, 'pending');
-  new_status payment_status := NEW.status;
-BEGIN
-  IF TG_OP = 'INSERT' THEN
-    RETURN NEW;
-  END IF;
-
-  IF (old_status = 'pending'    AND new_status IN ('authorized','paid','failed','cancelled'))
-  OR (old_status = 'authorized' AND new_status IN ('paid','failed','cancelled'))
-  OR (old_status = 'paid'       AND new_status IN ('refunded'))
-  OR (old_status = new_status)
-  THEN
-    RETURN NEW;
-  END IF;
-
-  RAISE EXCEPTION 'Invalid status transition: % -> %', old_status, new_status;
-END$$;
-DROP TRIGGER IF EXISTS trg_orders_status_flow ON orders;
-CREATE TRIGGER trg_orders_status_flow
-BEFORE UPDATE OF status ON orders
-FOR EACH ROW EXECUTE FUNCTION orders_validate_status_transition();
-
--- ========== CREDITS LEDGER ==========
-CREATE TABLE IF NOT EXISTS credits_ledger (
+-- ---------------------------------------------------------------------
+-- Users
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
   id             BIGSERIAL PRIMARY KEY,
-  user_id        UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  gen            gen_type NOT NULL,
-  op             ledger_op NOT NULL,       -- grant_paid | spend_paid | spend_free | adjustment
-  amount         INTEGER NOT NULL CHECK (amount > 0),
-  order_id       UUID REFERENCES orders(id) ON DELETE SET NULL,
-  job_id         UUID,                     -- будет заполнен после создания job (опционально)
-  occurred_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS credits_ledger_user_time_idx ON credits_ledger(user_id, occurred_at DESC);
-CREATE INDEX IF NOT EXISTS credits_ledger_kind_idx ON credits_ledger(gen, op, occurred_at DESC);
-CREATE INDEX IF NOT EXISTS credits_ledger_user_gen_time_idx ON credits_ledger(user_id, gen, occurred_at DESC);
+  tg_id          BIGINT UNIQUE NOT NULL,          -- Telegram user id
+  username       citext,
+  first_name     text,
+  last_name      text,
+  lang_code      text,
+  email          citext,
+  is_admin       boolean NOT NULL DEFAULT false,
 
--- ========== JOBS ==========
-CREATE TABLE IF NOT EXISTS jobs (
-  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id        UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  gen            gen_type NOT NULL,
-  provider       provider_kind NOT NULL,
-  model_code     TEXT,
-  ai_model_id    UUID,                         -- ссылка на ai_models.id (строгая целостность)
-  status         job_status NOT NULL DEFAULT 'queued',
-  prompt_hash    TEXT,
-  input_tokens   INTEGER,
-  output_tokens  INTEGER,
-  meta           JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  started_at     TIMESTAMPTZ,
-  finished_at    TIMESTAMPTZ
-);
-ALTER TABLE jobs
-  ADD CONSTRAINT IF NOT EXISTS jobs_ai_model_fk
-  FOREIGN KEY (ai_model_id) REFERENCES ai_models(id) ON DELETE SET NULL;
-CREATE INDEX IF NOT EXISTS jobs_user_time_idx ON jobs(user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS jobs_status_idx ON jobs(status, created_at DESC);
-CREATE INDEX IF NOT EXISTS jobs_ai_model_idx ON jobs(ai_model_id);
+  -- Общее соглашение для медиа (фото/видео)
+  media_agreed   boolean NOT NULL DEFAULT false,
 
--- ========== CONFIG & AUDIT ==========
-CREATE TABLE IF NOT EXISTS config_kv (
-  key        TEXT PRIMARY KEY,
-  value      JSONB NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  -- Агрегированные балансы (кеш; источник истины — credit_ledger)
+  text_balance   integer NOT NULL DEFAULT 0,
+  image_balance  integer NOT NULL DEFAULT 0,
+  video_balance  integer NOT NULL DEFAULT 0,
+  search_balance integer NOT NULL DEFAULT 0,
+
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS audit_logs (
-  id        BIGSERIAL PRIMARY KEY,
-  actor_id  UUID REFERENCES users(id),       -- допускаем системные действия (NULL)
-  action    TEXT NOT NULL,                   -- 'admin.update_config', ...
-  entity    TEXT,
-  entity_id TEXT,
-  meta      JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS audit_logs_time_idx ON audit_logs(created_at DESC);
-ALTER TABLE audit_logs
-  ADD CONSTRAINT IF NOT EXISTS audit_logs_meta_is_object CHECK (jsonb_typeof(meta) = 'object');
+CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
+CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users(is_admin);
 
--- ========== MATERIALIZED VIEW: дневная аналитика по ledger ==========
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ledger_daily AS
+DROP TRIGGER IF EXISTS trg_users_set_updated ON users;
+CREATE TRIGGER trg_users_set_updated
+BEFORE UPDATE ON users
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ---------------------------------------------------------------------
+-- Packages (наборы попыток)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS packages (
+  id              BIGSERIAL PRIMARY KEY,
+  code            text UNIQUE NOT NULL,           -- "start_1", "pro_10", ...
+  title           text NOT NULL,
+  price_rub       integer NOT NULL,               -- рубли (int); в коде умножаем ×100 для TG
+  text_credits    integer NOT NULL DEFAULT 0,
+  image_credits   integer NOT NULL DEFAULT 0,
+  video_credits   integer NOT NULL DEFAULT 0,
+  search_credits  integer NOT NULL DEFAULT 0,
+  is_active       boolean NOT NULL DEFAULT true,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS trg_packages_set_updated ON packages;
+CREATE TRIGGER trg_packages_set_updated
+BEFORE UPDATE ON packages
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ---------------------------------------------------------------------
+-- Orders (Telegram Payments + YooKassa)
+-- payload = id (uuid)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS orders (
+  id                             uuid PRIMARY KEY DEFAULT uuid_generate_v4(),  -- = payload
+  user_id                        BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  package_id                     BIGINT NOT NULL REFERENCES packages(id) ON DELETE RESTRICT,
+  amount_rub                     integer NOT NULL,
+  currency                       text NOT NULL DEFAULT 'RUB',
+  status                         order_status NOT NULL,
+  tg_invoice_msg_id              BIGINT,
+  tg_payment_charge_id           text,         -- TelegramPaymentChargeId
+  provider_payment_charge_id     text,         -- из YooKassa (сверка)
+  buyer_email                    citext,
+  provider_data                  jsonb,        -- receipt/доп.данные
+
+  created_at                     timestamptz NOT NULL DEFAULT now(),
+  paid_at                        timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_provider_charge ON orders(provider_payment_charge_id);
+
+-- ---------------------------------------------------------------------
+-- Credit Ledger (движение по попыткам) — источник истины
+-- положительные записи: начисления; отрицательные: списания
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS credit_ledger (
+  id             BIGSERIAL PRIMARY KEY,
+  user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  order_id       uuid REFERENCES orders(id) ON DELETE SET NULL,
+  gen_kind       gen_type,                            -- опционально для spend
+  delta_text     integer NOT NULL DEFAULT 0,
+  delta_image    integer NOT NULL DEFAULT 0,
+  delta_video    integer NOT NULL DEFAULT 0,
+  delta_search   integer NOT NULL DEFAULT 0,
+  reason         ledger_reason NOT NULL,
+  meta           jsonb,                               -- модель, prompt id, комментарий
+  created_at     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ledger_user ON credit_ledger(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_ledger_reason ON credit_ledger(reason, created_at);
+
+-- Триггер: применяет запись леджера к кеш-балансам
+CREATE OR REPLACE FUNCTION apply_ledger_to_balances()
+RETURNS trigger AS $$
+BEGIN
+  UPDATE users
+  SET
+    text_balance   = text_balance   + NEW.delta_text,
+    image_balance  = image_balance  + NEW.delta_image,
+    video_balance  = video_balance  + NEW.delta_video,
+    search_balance = search_balance + NEW.delta_search,
+    updated_at     = now()
+  WHERE id = NEW.user_id;
+
+  RETURN NEW;
+END$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_ledger_apply ON credit_ledger;
+CREATE TRIGGER trg_ledger_apply
+AFTER INSERT ON credit_ledger
+FOR EACH ROW EXECUTE FUNCTION apply_ledger_to_balances();
+
+-- Запретить ухода в минус при списании
+CREATE OR REPLACE FUNCTION prevent_negative_balances()
+RETURNS trigger AS $$
+DECLARE
+  u users;
+BEGIN
+  SELECT * INTO u FROM users WHERE id = NEW.user_id FOR UPDATE;
+  IF (u.text_balance   + NEW.delta_text)   < 0 THEN RAISE EXCEPTION 'Not enough text credits'; END IF;
+  IF (u.image_balance  + NEW.delta_image)  < 0 THEN RAISE EXCEPTION 'Not enough image credits'; END IF;
+  IF (u.video_balance  + NEW.delta_video)  < 0 THEN RAISE EXCEPTION 'Not enough video credits'; END IF;
+  IF (u.search_balance + NEW.delta_search) < 0 THEN RAISE EXCEPTION 'Not enough search credits'; END IF;
+  RETURN NEW;
+END$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_ledger_prevent_negative ON credit_ledger;
+CREATE TRIGGER trg_ledger_prevent_negative
+BEFORE INSERT ON credit_ledger
+FOR EACH ROW
+WHEN (NEW.delta_text < 0 OR NEW.delta_image < 0 OR NEW.delta_video < 0 OR NEW.delta_search < 0)
+EXECUTE FUNCTION prevent_negative_balances();
+
+-- ---------------------------------------------------------------------
+-- Generation Requests / Usage Logs
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS generation_requests (
+  id                   BIGSERIAL PRIMARY KEY,
+  user_id              BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind                 gen_type NOT NULL,
+  provider             text NOT NULL,                     -- "openai","perplexity","google","qwen","suno","sora"...
+  model                text NOT NULL,                     -- точное имя модели
+  request_id_ext       text,                              -- id у провайдера, если есть
+  prompt_hash          text,                              -- для дедуп/поиска
+  input_tokens         integer,
+  output_tokens        integer,
+  cost_credits_text    integer DEFAULT 0,
+  cost_credits_image   integer DEFAULT 0,
+  cost_credits_video   integer DEFAULT 0,
+  cost_credits_search  integer DEFAULT 0,
+  status               text NOT NULL,                     -- "ok","error","timeout","canceled"
+  error_message        text,
+  latency_ms           integer,
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  finished_at          timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_gen_user_time ON generation_requests(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_gen_kind ON generation_requests(kind, created_at);
+CREATE INDEX IF NOT EXISTS idx_gen_provider_model ON generation_requests(provider, model);
+
+-- ---------------------------------------------------------------------
+-- Admin Broadcasts (новости/изменения) + доставки (по желанию)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS admin_broadcasts (
+  id           BIGSERIAL PRIMARY KEY,
+  author_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  title        text NOT NULL,
+  body         text NOT NULL,
+  sent_at      timestamptz,                           -- null = черновик/план
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS trg_broadcasts_set_updated ON admin_broadcasts;
+CREATE TRIGGER trg_broadcasts_set_updated
+BEFORE UPDATE ON admin_broadcasts
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- Журнал доставки рассылок (можно удалить, если не нужен охват/аналитика)
+CREATE TABLE IF NOT EXISTS admin_broadcast_deliveries (
+  id             BIGSERIAL PRIMARY KEY,
+  broadcast_id   BIGINT NOT NULL REFERENCES admin_broadcasts(id) ON DELETE CASCADE,
+  user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  delivered_at   timestamptz,
+  error          text
+);
+CREATE INDEX IF NOT EXISTS idx_brd_deliv_brc ON admin_broadcast_deliveries(broadcast_id);
+CREATE INDEX IF NOT EXISTS idx_brd_deliv_user ON admin_broadcast_deliveries(user_id);
+
+-- ---------------------------------------------------------------------
+-- Settings (конфиги, которые меняет админка)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS settings (
+  key        text PRIMARY KEY,
+  value      jsonb NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Дефолтные бесплатные лимиты из ТЗ
+INSERT INTO settings(key, value) VALUES
+  ('free', jsonb_build_object(
+      'text_per_month',   10,
+      'search_per_month', 10,
+      'image_per_month',  3,
+      'video_per_month',  1
+  ))
+ON CONFLICT (key) DO NOTHING;
+
+-- ---------------------------------------------------------------------
+-- Views (удобные представления)
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_user_balances AS
 SELECT
-  date_trunc('day', occurred_at) AS day,
-  gen,
-  SUM(CASE WHEN op='grant_paid' THEN amount ELSE 0 END) AS granted,
-  SUM(CASE WHEN op='spend_paid' THEN amount ELSE 0 END)  AS paid_spent,
-  SUM(CASE WHEN op='spend_free' THEN amount ELSE 0 END)  AS free_spent,
-  COUNT(DISTINCT user_id) AS dau
-FROM credits_ledger
-GROUP BY 1,2;
-CREATE INDEX IF NOT EXISTS mv_ledger_daily_day_idx ON mv_ledger_daily(day);
+  u.id,
+  u.tg_id,
+  u.username,
+  u.text_balance,
+  u.image_balance,
+  u.video_balance,
+  u.search_balance,
+  u.created_at,
+  u.updated_at
+FROM users u;
 
-COMMIT;
+CREATE OR REPLACE VIEW v_order_brief AS
+SELECT
+  o.id,
+  o.user_id,
+  o.package_id,
+  p.code AS package_code,
+  o.amount_rub,
+  o.status,
+  o.provider_payment_charge_id,
+  o.created_at,
+  o.paid_at
+FROM orders o
+JOIN packages p ON p.id = o.package_id;
+
+-- ---------------------------------------------------------------------
+-- Notes:
+-- - При оплате проверяем amount_rub и currency='RUB' до answerPreCheckoutQuery.
+-- - Балансы в users — кеш; вся истина в credit_ledger.
+-- - media_agreed = единое согласие для фото/видео.
+-- ---------------------------------------------------------------------

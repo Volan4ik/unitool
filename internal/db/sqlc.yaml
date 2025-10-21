@@ -1,0 +1,15 @@
+version: "2"
+overrides:
+  go-package: "generated"
+sql:
+  - engine: postgresql
+    queries: "internal/db/queries/*.sql"
+    schema: "migrations"
+    gen:
+      go:
+        package: generated
+        out: "internal/db/generated"
+        emit_json_tags: true
+        emit_prepared_queries: true
+        emit_interface: true
+        sql_package: "pgx/v5"
