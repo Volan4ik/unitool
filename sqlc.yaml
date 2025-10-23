@@ -1,10 +1,9 @@
 version: "2"
-overrides:
-  go-package: "generated"
+
 sql:
   - engine: postgresql
     queries: "internal/db/queries/*.sql"
-    schema: "migrations"
+    schema: "migrations/schema.sql"
     gen:
       go:
         package: generated
