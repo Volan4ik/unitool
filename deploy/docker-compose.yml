@@ -9,10 +9,15 @@ services:
     ports: ["5432:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./migrations:/docker-entrypoint-initdb.d
+      - ../migrations:/docker-entrypoint-initdb.d
   bot:
-    build: ..
-    env_file: ../.env.example
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: ../.env
+    environment:
+      # Override DB connection for compose network
+      - DATABASE_URL=postgres://bot:bot@db:5432/bot?sslmode=disable
     depends_on: [db]
 volumes:
   pgdata: {}

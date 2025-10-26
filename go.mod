@@ -1,4 +1,4 @@
-module github.com/yourname/ai-telegram-bot
+module unitool
 
 go 1.22
 
