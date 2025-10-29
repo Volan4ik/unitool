@@ -22,7 +22,8 @@ type Config struct {
 	FreeImage        int    `envconfig:"FREE_IMAGE" default:"3"`
 	FreeVideo        int    `envconfig:"FREE_VIDEO" default:"1"`
 	MonthlyCronAtUTC string `envconfig:"MONTHLY_CRON_AT_UTC" default:"03:00"`
-	ShutdownTimeout  time.Duration `envconfig:"SHUTDOWN_TIMEOUT" default:"10s"`
+    ShutdownTimeout  time.Duration `envconfig:"SHUTDOWN_TIMEOUT" default:"10s"`
+    AutoMigrate      bool          `envconfig:"AUTO_MIGRATE" default:"true"`
 }
 
 func Load() (Config, error) {

@@ -17,7 +17,7 @@ type Querier interface {
 	CountByProviderModel(ctx context.Context, arg CountByProviderModelParams) ([]CountByProviderModelRow, error)
 	CreateBroadcast(ctx context.Context, arg CreateBroadcastParams) (AdminBroadcast, error)
 	CreateDelivery(ctx context.Context, arg CreateDeliveryParams) (AdminBroadcastDelivery, error)
-	CreateOrder(ctx context.Context, arg CreateOrderParams) (Order, error)
+	CreateOrder(ctx context.Context, arg CreateOrderParams) (CreateOrderRow, error)
 	CreatePackage(ctx context.Context, arg CreatePackageParams) (Package, error)
 	DailyUsageByKind(ctx context.Context, arg DailyUsageByKindParams) ([]DailyUsageByKindRow, error)
 	DeactivatePackage(ctx context.Context, id int64) error
@@ -25,17 +25,19 @@ type Querier interface {
 	FinishGenerationRequest(ctx context.Context, arg FinishGenerationRequestParams) error
 	GetAdmins(ctx context.Context) ([]GetAdminsRow, error)
 	GetBalancesByUserID(ctx context.Context, id int64) (GetBalancesByUserIDRow, error)
-	GetOrderByID(ctx context.Context, id pgtype.UUID) (Order, error)
+	GetLastChatHistory(ctx context.Context, arg GetLastChatHistoryParams) ([]GetLastChatHistoryRow, error)
+	GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByIDRow, error)
 	GetPackageByCode(ctx context.Context, code string) (Package, error)
 	GetPackageByID(ctx context.Context, id int64) (Package, error)
 	GetSetting(ctx context.Context, key string) ([]byte, error)
 	GetUserByID(ctx context.Context, id int64) (User, error)
 	GetUserByTGID(ctx context.Context, tgID int64) (User, error)
 	GetUserLedger(ctx context.Context, arg GetUserLedgerParams) ([]CreditLedger, error)
+	InsertChatMessage(ctx context.Context, arg InsertChatMessageParams) (ChatMessage, error)
 	InsertGenerationRequest(ctx context.Context, arg InsertGenerationRequestParams) (GenerationRequest, error)
 	ListActivePackages(ctx context.Context) ([]Package, error)
 	ListBroadcasts(ctx context.Context, arg ListBroadcastsParams) ([]AdminBroadcast, error)
-	ListUserOrders(ctx context.Context, arg ListUserOrdersParams) ([]Order, error)
+	ListUserOrders(ctx context.Context, arg ListUserOrdersParams) ([]ListUserOrdersRow, error)
 	MarkBroadcastSent(ctx context.Context, id int64) error
 	MarkDeliveryError(ctx context.Context, arg MarkDeliveryErrorParams) error
 	MarkDeliveryOK(ctx context.Context, id int64) error

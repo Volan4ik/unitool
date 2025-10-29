@@ -35,7 +35,6 @@ func NewService(bot *tgbotapi.BotAPI, providerToken string, q *db.Queries) *Serv
 }
 
 func (s *Service) SendInvoiceForPackage(chatID int64, userID int64, pkg Package, buyerEmail string) (string, error) {
-    // Create order in DB first
     orderUUID := uuid.New()
     pdStr := buildProviderDataReceipt(pkg.Title, pkg.PriceRub, buyerEmail)
     providerJSON := []byte(pdStr)
@@ -53,13 +52,21 @@ func (s *Service) SendInvoiceForPackage(chatID int64, userID int64, pkg Package,
     })
     if err != nil { return "", err }
 
-    // Send invoice to Telegram
     amountKopek := pkg.PriceRub * 100
     prices := []tgbotapi.LabeledPrice{{Label: pkg.Title, Amount: amountKopek}}
-    inv := tgbotapi.NewInvoice(chatID, pkg.Title, "Пакет попыток для нейросетей", orderUUID.String(), s.ProviderToken, "RUB", prices)
-    inv.NeedEmail = true
-    inv.SendEmailToProvider = true
-    inv.ProviderData = pdStr
+    inv := tgbotapi.InvoiceConfig{
+        BaseChat:            tgbotapi.BaseChat{ChatID: chatID},
+        Title:               pkg.Title,
+        Description:         "Пакет попыток для нейросетей",
+        Payload:             orderUUID.String(),
+        ProviderToken:       s.ProviderToken,
+        Currency:            "RUB",
+        Prices:              prices,
+        SuggestedTipAmounts: []int{},
+        NeedEmail:           true,
+        SendEmailToProvider: true,
+        ProviderData:        pdStr,
+    }
 
     _, err = s.Bot.Send(inv)
     if err != nil { return "", err }
@@ -71,7 +78,6 @@ func (s *Service) HandlePreCheckout(pcq *tgbotapi.PreCheckoutQuery) {
     resp := tgbotapi.PreCheckoutConfig{PreCheckoutQueryID: pcq.ID, OK: true}
     if _, err := s.Bot.Request(resp); err != nil { log.Println("answerPreCheckoutQuery error:", err) }
 
-    // Mark order precheckout_ok
     if pcq.InvoicePayload != "" {
         if u, err := uuid.Parse(pcq.InvoicePayload); err == nil {
             if err := s.Q.MarkOrderPrecheckout(s.DBCtx, pgtype.UUID{Bytes: u, Valid: true}); err != nil {
@@ -86,10 +92,9 @@ func (s *Service) HandlePreCheckout(pcq *tgbotapi.PreCheckoutQuery) {
 func (s *Service) HandleSuccessfulPayment(msg *tgbotapi.Message) {
     sp := msg.SuccessfulPayment
     if sp == nil { return }
-    payload := msg.InvoicePayload
+    payload := sp.InvoicePayload
     if payload == "" { return }
 
-    // Fetch order and verify amount/currency
     orderUUID, err := uuid.Parse(payload)
     if err != nil { log.Printf("invalid order payload: %v", err); return }
     order, err := s.Q.GetOrderByID(s.DBCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
@@ -131,7 +136,6 @@ func (s *Service) HandleSuccessfulPayment(msg *tgbotapi.Message) {
         return
     }
 
-    // Confirmation to user
     confirm := tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("Оплата успешна ✅\nЗаказ: %s\nСумма: %d ₽", payload, amountRub))
     s.Bot.Send(confirm)
 }

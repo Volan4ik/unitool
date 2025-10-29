@@ -1,7 +1,10 @@
 -- name: CreateOrder :one
 INSERT INTO orders (id, user_id, package_id, amount_rub, status, buyer_email, provider_data)
 VALUES ($1,$2,$3,$4,'created',$5,$6)
-RETURNING *;
+RETURNING id, user_id, package_id, amount_rub, currency,
+          status::text AS status,
+          tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
+          buyer_email, provider_data, created_at, paid_at;
 
 -- name: MarkOrderPrecheckout :exec
 UPDATE orders SET status='precheckout_ok' WHERE id=$1;
@@ -21,8 +24,15 @@ UPDATE orders SET status='failed' WHERE id=$1;
 UPDATE orders SET status='refunded' WHERE id=$1;
 
 -- name: GetOrderByID :one
-SELECT * FROM orders WHERE id = $1;
+SELECT id, user_id, package_id, amount_rub, currency,
+       status::text AS status,
+       tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
+       buyer_email, provider_data, created_at, paid_at
+FROM orders WHERE id = $1;
 
 -- name: ListUserOrders :many
-SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int;
-
+SELECT id, user_id, package_id, amount_rub, currency,
+       status::text AS status,
+       tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
+       buyer_email, provider_data, created_at, paid_at
+FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int;

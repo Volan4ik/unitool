@@ -1,11 +1,10 @@
 package telegram
 
 import (
-	"context"
-	"net/http"
-	"time"
+    "net/http"
+    "time"
 
-	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
+    tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type Bot struct {
@@ -13,15 +12,18 @@ type Bot struct {
 }
 
 func New(token string) (*Bot, error) {
-	api, err := tgbotapi.NewBotAPI(token)
-	if err != nil { return nil, err }
-	api.Client = &http.Client{ Timeout: 10 * time.Second }
-	return &Bot{API: api}, nil
+    api, err := tgbotapi.NewBotAPI(token)
+    if err != nil { return nil, err }
+    // Use a long timeout to match Telegram long-polling (~50s)
+    api.Client = &http.Client{ Timeout: 65 * time.Second }
+    return &Bot{API: api}, nil
 }
 
 func (b *Bot) SetWebhook(url string) error {
-	_, err := b.API.Request(tgbotapi.NewWebhook(url))
-	return err
+    cfg, err := tgbotapi.NewWebhook(url)
+    if err != nil { return err }
+    _, err = b.API.Request(cfg)
+    return err
 }
 
 func (b *Bot) DeleteWebhook() error {

@@ -14,7 +14,10 @@ import (
 const createOrder = `-- name: CreateOrder :one
 INSERT INTO orders (id, user_id, package_id, amount_rub, status, buyer_email, provider_data)
 VALUES ($1,$2,$3,$4,'created',$5,$6)
-RETURNING id, user_id, package_id, amount_rub, currency, status, tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id, buyer_email, provider_data, created_at, paid_at
+RETURNING id, user_id, package_id, amount_rub, currency,
+          status::text AS status,
+          tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
+          buyer_email, provider_data, created_at, paid_at
 `
 
 type CreateOrderParams struct {
@@ -26,7 +29,23 @@ type CreateOrderParams struct {
 	ProviderData []byte      `json:"provider_data"`
 }
 
-func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Order, error) {
+type CreateOrderRow struct {
+	ID                      pgtype.UUID        `json:"id"`
+	UserID                  int64              `json:"user_id"`
+	PackageID               int64              `json:"package_id"`
+	AmountRub               int32              `json:"amount_rub"`
+	Currency                string             `json:"currency"`
+	Status                  string             `json:"status"`
+	TgInvoiceMsgID          pgtype.Int8        `json:"tg_invoice_msg_id"`
+	TgPaymentChargeID       pgtype.Text        `json:"tg_payment_charge_id"`
+	ProviderPaymentChargeID pgtype.Text        `json:"provider_payment_charge_id"`
+	BuyerEmail              pgtype.Text        `json:"buyer_email"`
+	ProviderData            []byte             `json:"provider_data"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	PaidAt                  pgtype.Timestamptz `json:"paid_at"`
+}
+
+func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (CreateOrderRow, error) {
 	row := q.db.QueryRow(ctx, createOrder,
 		arg.ID,
 		arg.UserID,
@@ -35,7 +54,7 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Order
 		arg.BuyerEmail,
 		arg.ProviderData,
 	)
-	var i Order
+	var i CreateOrderRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
@@ -55,12 +74,32 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Order
 }
 
 const getOrderByID = `-- name: GetOrderByID :one
-SELECT id, user_id, package_id, amount_rub, currency, status, tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id, buyer_email, provider_data, created_at, paid_at FROM orders WHERE id = $1
+SELECT id, user_id, package_id, amount_rub, currency,
+       status::text AS status,
+       tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
+       buyer_email, provider_data, created_at, paid_at
+FROM orders WHERE id = $1
 `
 
-func (q *Queries) GetOrderByID(ctx context.Context, id pgtype.UUID) (Order, error) {
+type GetOrderByIDRow struct {
+	ID                      pgtype.UUID        `json:"id"`
+	UserID                  int64              `json:"user_id"`
+	PackageID               int64              `json:"package_id"`
+	AmountRub               int32              `json:"amount_rub"`
+	Currency                string             `json:"currency"`
+	Status                  string             `json:"status"`
+	TgInvoiceMsgID          pgtype.Int8        `json:"tg_invoice_msg_id"`
+	TgPaymentChargeID       pgtype.Text        `json:"tg_payment_charge_id"`
+	ProviderPaymentChargeID pgtype.Text        `json:"provider_payment_charge_id"`
+	BuyerEmail              pgtype.Text        `json:"buyer_email"`
+	ProviderData            []byte             `json:"provider_data"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	PaidAt                  pgtype.Timestamptz `json:"paid_at"`
+}
+
+func (q *Queries) GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByIDRow, error) {
 	row := q.db.QueryRow(ctx, getOrderByID, id)
-	var i Order
+	var i GetOrderByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
@@ -80,7 +119,11 @@ func (q *Queries) GetOrderByID(ctx context.Context, id pgtype.UUID) (Order, erro
 }
 
 const listUserOrders = `-- name: ListUserOrders :many
-SELECT id, user_id, package_id, amount_rub, currency, status, tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id, buyer_email, provider_data, created_at, paid_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int
+SELECT id, user_id, package_id, amount_rub, currency,
+       status::text AS status,
+       tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
+       buyer_email, provider_data, created_at, paid_at
+FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int
 `
 
 type ListUserOrdersParams struct {
@@ -89,15 +132,31 @@ type ListUserOrdersParams struct {
 	Column3 int32 `json:"column_3"`
 }
 
-func (q *Queries) ListUserOrders(ctx context.Context, arg ListUserOrdersParams) ([]Order, error) {
+type ListUserOrdersRow struct {
+	ID                      pgtype.UUID        `json:"id"`
+	UserID                  int64              `json:"user_id"`
+	PackageID               int64              `json:"package_id"`
+	AmountRub               int32              `json:"amount_rub"`
+	Currency                string             `json:"currency"`
+	Status                  string             `json:"status"`
+	TgInvoiceMsgID          pgtype.Int8        `json:"tg_invoice_msg_id"`
+	TgPaymentChargeID       pgtype.Text        `json:"tg_payment_charge_id"`
+	ProviderPaymentChargeID pgtype.Text        `json:"provider_payment_charge_id"`
+	BuyerEmail              pgtype.Text        `json:"buyer_email"`
+	ProviderData            []byte             `json:"provider_data"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	PaidAt                  pgtype.Timestamptz `json:"paid_at"`
+}
+
+func (q *Queries) ListUserOrders(ctx context.Context, arg ListUserOrdersParams) ([]ListUserOrdersRow, error) {
 	rows, err := q.db.Query(ctx, listUserOrders, arg.UserID, arg.Column2, arg.Column3)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Order
+	var items []ListUserOrdersRow
 	for rows.Next() {
-		var i Order
+		var i ListUserOrdersRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.UserID,

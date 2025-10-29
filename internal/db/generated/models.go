@@ -26,6 +26,22 @@ type AdminBroadcastDelivery struct {
 	Error       pgtype.Text        `json:"error"`
 }
 
+type ChatMessage struct {
+	ID                  int64              `json:"id"`
+	UserID              int64              `json:"user_id"`
+	ConversationID      pgtype.UUID        `json:"conversation_id"`
+	Kind                string             `json:"kind"`
+	Role                string             `json:"role"`
+	ContentText         pgtype.Text        `json:"content_text"`
+	AttachmentUrl       pgtype.Text        `json:"attachment_url"`
+	Provider            pgtype.Text        `json:"provider"`
+	Model               pgtype.Text        `json:"model"`
+	InputTokens         pgtype.Int4        `json:"input_tokens"`
+	OutputTokens        pgtype.Int4        `json:"output_tokens"`
+	GenerationRequestID pgtype.Int8        `json:"generation_request_id"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
 type CreditLedger struct {
 	ID          int64              `json:"id"`
 	UserID      int64              `json:"user_id"`

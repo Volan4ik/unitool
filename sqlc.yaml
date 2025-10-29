@@ -3,7 +3,9 @@ version: "2"
 sql:
   - engine: postgresql
     queries: "internal/db/queries/*.sql"
-    schema: "migrations/schema.sql"
+    schema:
+      - "migrations/schema.sql"
+      - "migrations/0003_chat_messages.sql"
     gen:
       go:
         package: generated

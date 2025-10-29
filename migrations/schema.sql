@@ -1,15 +1,6 @@
--- =====================================================================
---  Neural Bot – DB Schema (PostgreSQL 14+)
---  Согласие по фото/видео объединено: users.media_agreed
--- =====================================================================
-
--- Extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS citext;
 
--- ---------------------------------------------------------------------
--- Types
--- ---------------------------------------------------------------------
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'gen_type') THEN
@@ -25,9 +16,6 @@ BEGIN
   END IF;
 END$$;
 
--- ---------------------------------------------------------------------
--- Utility: updated_at trigger
--- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS trigger AS $$
 BEGIN
@@ -35,23 +23,16 @@ BEGIN
   RETURN NEW;
 END$$ LANGUAGE plpgsql;
 
--- ---------------------------------------------------------------------
--- Users
--- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
   id             BIGSERIAL PRIMARY KEY,
-  tg_id          BIGINT UNIQUE NOT NULL,          -- Telegram user id
+  tg_id          BIGINT UNIQUE NOT NULL,
   username       citext,
   first_name     text,
   last_name      text,
   lang_code      text,
   email          citext,
   is_admin       boolean NOT NULL DEFAULT false,
-
-  -- Общее соглашение для медиа (фото/видео)
   media_agreed   boolean NOT NULL DEFAULT false,
-
-  -- Агрегированные балансы (кеш; источник истины — credit_ledger)
   text_balance   integer NOT NULL DEFAULT 0,
   image_balance  integer NOT NULL DEFAULT 0,
   video_balance  integer NOT NULL DEFAULT 0,
@@ -69,14 +50,11 @@ CREATE TRIGGER trg_users_set_updated
 BEFORE UPDATE ON users
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- ---------------------------------------------------------------------
--- Packages (наборы попыток)
--- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS packages (
   id              BIGSERIAL PRIMARY KEY,
-  code            text UNIQUE NOT NULL,           -- "start_1", "pro_10", ...
+  code            text UNIQUE NOT NULL,
   title           text NOT NULL,
-  price_rub       integer NOT NULL,               -- рубли (int); в коде умножаем ×100 для TG
+  price_rub       integer NOT NULL,
   text_credits    integer NOT NULL DEFAULT 0,
   image_credits   integer NOT NULL DEFAULT 0,
   video_credits   integer NOT NULL DEFAULT 0,
@@ -92,9 +70,15 @@ BEFORE UPDATE ON packages
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ---------------------------------------------------------------------
--- Orders (Telegram Payments + YooKassa)
--- payload = id (uuid)
+-- Default packages (seed)
 -- ---------------------------------------------------------------------
+INSERT INTO packages(code, title, price_rub, text_credits, image_credits, video_credits, search_credits)
+VALUES
+  ('starter', 'Стартовый пакет', 199, 50, 0, 0, 50),
+  ('media',   'Фото+Видео',       499, 0, 10, 5, 0),
+  ('protxt',  'Текст PRO',       1490, 300, 0, 0, 300)
+ON CONFLICT (code) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS orders (
   id                             uuid PRIMARY KEY DEFAULT uuid_generate_v4(),  -- = payload
   user_id                        BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -116,28 +100,23 @@ CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_provider_charge ON orders(provider_payment_charge_id);
 
--- ---------------------------------------------------------------------
--- Credit Ledger (движение по попыткам) — источник истины
--- положительные записи: начисления; отрицательные: списания
--- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS credit_ledger (
   id             BIGSERIAL PRIMARY KEY,
   user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   order_id       uuid REFERENCES orders(id) ON DELETE SET NULL,
-  gen_kind       gen_type,                            -- опционально для spend
+  gen_kind       gen_type,                      
   delta_text     integer NOT NULL DEFAULT 0,
   delta_image    integer NOT NULL DEFAULT 0,
   delta_video    integer NOT NULL DEFAULT 0,
   delta_search   integer NOT NULL DEFAULT 0,
   reason         ledger_reason NOT NULL,
-  meta           jsonb,                               -- модель, prompt id, комментарий
+  meta           jsonb,                  
   created_at     timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON credit_ledger(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_ledger_reason ON credit_ledger(reason, created_at);
 
--- Триггер: применяет запись леджера к кеш-балансам
 CREATE OR REPLACE FUNCTION apply_ledger_to_balances()
 RETURNS trigger AS $$
 BEGIN
@@ -158,7 +137,6 @@ CREATE TRIGGER trg_ledger_apply
 AFTER INSERT ON credit_ledger
 FOR EACH ROW EXECUTE FUNCTION apply_ledger_to_balances();
 
--- Запретить ухода в минус при списании
 CREATE OR REPLACE FUNCTION prevent_negative_balances()
 RETURNS trigger AS $$
 DECLARE
@@ -179,24 +157,21 @@ FOR EACH ROW
 WHEN (NEW.delta_text < 0 OR NEW.delta_image < 0 OR NEW.delta_video < 0 OR NEW.delta_search < 0)
 EXECUTE FUNCTION prevent_negative_balances();
 
--- ---------------------------------------------------------------------
--- Generation Requests / Usage Logs
--- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS generation_requests (
   id                   BIGSERIAL PRIMARY KEY,
   user_id              BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind                 gen_type NOT NULL,
-  provider             text NOT NULL,                     -- "openai","perplexity","google","qwen","suno","sora"...
-  model                text NOT NULL,                     -- точное имя модели
-  request_id_ext       text,                              -- id у провайдера, если есть
-  prompt_hash          text,                              -- для дедуп/поиска
+  provider             text NOT NULL,
+  model                text NOT NULL,
+  request_id_ext       text,
+  prompt_hash          text,
   input_tokens         integer,
   output_tokens        integer,
   cost_credits_text    integer DEFAULT 0,
   cost_credits_image   integer DEFAULT 0,
   cost_credits_video   integer DEFAULT 0,
   cost_credits_search  integer DEFAULT 0,
-  status               text NOT NULL,                     -- "ok","error","timeout","canceled"
+  status               text NOT NULL,
   error_message        text,
   latency_ms           integer,
   created_at           timestamptz NOT NULL DEFAULT now(),
@@ -207,15 +182,12 @@ CREATE INDEX IF NOT EXISTS idx_gen_user_time ON generation_requests(user_id, cre
 CREATE INDEX IF NOT EXISTS idx_gen_kind ON generation_requests(kind, created_at);
 CREATE INDEX IF NOT EXISTS idx_gen_provider_model ON generation_requests(provider, model);
 
--- ---------------------------------------------------------------------
--- Admin Broadcasts (новости/изменения) + доставки (по желанию)
--- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS admin_broadcasts (
   id           BIGSERIAL PRIMARY KEY,
   author_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   title        text NOT NULL,
   body         text NOT NULL,
-  sent_at      timestamptz,                           -- null = черновик/план
+  sent_at      timestamptz,
   created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now()
 );
@@ -225,7 +197,6 @@ CREATE TRIGGER trg_broadcasts_set_updated
 BEFORE UPDATE ON admin_broadcasts
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Журнал доставки рассылок (можно удалить, если не нужен охват/аналитика)
 CREATE TABLE IF NOT EXISTS admin_broadcast_deliveries (
   id             BIGSERIAL PRIMARY KEY,
   broadcast_id   BIGINT NOT NULL REFERENCES admin_broadcasts(id) ON DELETE CASCADE,
@@ -236,16 +207,12 @@ CREATE TABLE IF NOT EXISTS admin_broadcast_deliveries (
 CREATE INDEX IF NOT EXISTS idx_brd_deliv_brc ON admin_broadcast_deliveries(broadcast_id);
 CREATE INDEX IF NOT EXISTS idx_brd_deliv_user ON admin_broadcast_deliveries(user_id);
 
--- ---------------------------------------------------------------------
--- Settings (конфиги, которые меняет админка)
--- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS settings (
   key        text PRIMARY KEY,
   value      jsonb NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
--- Дефолтные бесплатные лимиты из ТЗ
 INSERT INTO settings(key, value) VALUES
   ('free', jsonb_build_object(
       'text_per_month',   10,
@@ -255,9 +222,6 @@ INSERT INTO settings(key, value) VALUES
   ))
 ON CONFLICT (key) DO NOTHING;
 
--- ---------------------------------------------------------------------
--- Views (удобные представления)
--- ---------------------------------------------------------------------
 CREATE OR REPLACE VIEW v_user_balances AS
 SELECT
   u.id,
@@ -284,10 +248,3 @@ SELECT
   o.paid_at
 FROM orders o
 JOIN packages p ON p.id = o.package_id;
-
--- ---------------------------------------------------------------------
--- Notes:
--- - При оплате проверяем amount_rub и currency='RUB' до answerPreCheckoutQuery.
--- - Балансы в users — кеш; вся истина в credit_ledger.
--- - media_agreed = единое согласие для фото/видео.
--- ---------------------------------------------------------------------

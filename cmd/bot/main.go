@@ -17,6 +17,7 @@ import (
     "unitool/internal/storage"
     "unitool/internal/telegram"
     db "unitool/internal/db/generated"
+    migr "unitool"
 
     tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -32,8 +33,15 @@ func main() {
 	if err != nil { logg.Fatal().Err(err).Msg("pg connect") }
 	defer pg.Close()
 
-	bot, err := telegram.New(cfg.TelegramToken)
-	if err != nil { logg.Fatal().Err(err).Msg("tg bot") }
+    bot, err := telegram.New(cfg.TelegramToken)
+    if err != nil { logg.Fatal().Err(err).Msg("tg bot") }
+
+    // Apply schema if enabled
+    if cfg.AutoMigrate {
+        if err := migr.Apply(ctx, pg.Pool); err != nil {
+            logg.Fatal().Err(err).Msg("apply migrations")
+        }
+    }
 
     queries := db.New(pg.Pool)
     pay := payments.NewService(bot.API, cfg.ProviderToken, queries)
@@ -45,8 +53,9 @@ func main() {
 
 	// Webhook-less: Long Polling (для старта просто)
 	bot.DeleteWebhook()
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 10
+    u := tgbotapi.NewUpdate(0)
+    // Telegram recommends ~50s long-poll timeout
+    u.Timeout = 50
 	updates := bot.API.GetUpdatesChan(u)
 
 	// graceful shutdown
