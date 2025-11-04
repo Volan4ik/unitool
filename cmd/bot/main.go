@@ -18,15 +18,20 @@ import (
     "unitool/internal/telegram"
     db "unitool/internal/db/generated"
     migr "unitool"
+    cometprov "unitool/pkg/provider/comet"
+    "unitool/internal/rate"
 
     tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 func main() {
-	cfg, err := config.Load()
-	if err != nil { log.Fatal(err) }
-	logg := logger.New(cfg.AppEnv)
-	metrics.Serve(cfg.MetricsAddr)
+    cfg, err := config.Load()
+    if err != nil { log.Fatal(err) }
+    logg := logger.New(cfg.AppEnv)
+    metrics.Serve(cfg.MetricsAddr)
+    if cfg.CometKey == "" {
+        logg.Fatal().Msg("COMET_API_KEY is required")
+    }
 
 	ctx := context.Background()
 	pg, err := storage.New(ctx, cfg.DBURL)
@@ -45,7 +50,12 @@ func main() {
 
     queries := db.New(pg.Pool)
     pay := payments.NewService(bot.API, cfg.ProviderToken, queries)
-    router := telegram.NewRouter(bot, pay, queries)
+    // Comet provider (OpenAI-compatible endpoints; minimal wiring)
+    comet := cometprov.New(cfg.CometBase, cfg.CometKey, cfg.CometTimeout)
+    // Global provider rate limit
+    rl := rate.New(cfg.CometBurst, cfg.CometRPS, time.Second)
+    editThrottle := time.Duration(cfg.TGEditThrottleMs) * time.Millisecond
+    router := telegram.NewRouter(bot, pay, queries, comet, rl, editThrottle, cfg.TGEditMaxPerMin)
 
 	// Monthly free credits service
 	monthlySvc := monthly.NewService(pg, cfg.MonthlyCronAtUTC)
@@ -71,5 +81,7 @@ func main() {
 	<-stop
 	logg.Info().Msg("shutdown")
 	time.Sleep(300 * time.Millisecond)
-	_ = http.DefaultClient.CloseIdleConnections
+    if tr, ok := http.DefaultTransport.(*http.Transport); ok {
+        tr.CloseIdleConnections()
+    }
 }

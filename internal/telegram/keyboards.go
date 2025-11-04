@@ -4,14 +4,6 @@ import (
     tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-// Static model lists
-var (
-    textModels   = []string{"GPT-5", "Claude 4.5", "Gemini 2.5 Pro", "Grok 4"}
-    searchModels = []string{"Perplexity", "GPT-5", "Claude 4.5", "Gemini 2.5 Pro", "Grok 4"}
-    imageModels  = []string{"Flux", "Midjourney", "Ideogram"}
-    videoModels  = []string{"Sora", "Kling", "Hailuo"}
-)
-
 func MainReplyKeyboard() tgbotapi.ReplyKeyboardMarkup {
     row1 := tgbotapi.NewKeyboardButtonRow(
         tgbotapi.NewKeyboardButton("Сгенерировать текст"),
@@ -40,19 +32,7 @@ func ModelsInlineKeyboard(mode string, selected string) tgbotapi.InlineKeyboardM
     )
 
     // Model rows
-    var models []string
-    switch mode {
-    case "text":
-        models = textModels
-    case "search":
-        models = searchModels
-    case "image":
-        models = imageModels
-    case "video":
-        models = videoModels
-    default:
-        models = textModels
-    }
+    models := ModelUIList(mode)
 
     // build buttons in rows of up to 2-3
     rows := [][]tgbotapi.InlineKeyboardButton{tabs}

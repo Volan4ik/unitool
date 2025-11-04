@@ -24,6 +24,15 @@ type Config struct {
 	MonthlyCronAtUTC string `envconfig:"MONTHLY_CRON_AT_UTC" default:"03:00"`
     ShutdownTimeout  time.Duration `envconfig:"SHUTDOWN_TIMEOUT" default:"10s"`
     AutoMigrate      bool          `envconfig:"AUTO_MIGRATE" default:"true"`
+    CometBase    string        `envconfig:"COMET_API_BASE" default:"https://api.cometapi.com"`
+    CometKey     string        `envconfig:"COMET_API_KEY" required:"true"`
+    CometTimeout time.Duration `envconfig:"COMET_TIMEOUT" default:"25s"`
+    // Provider rate limiting
+    CometRPS      int           `envconfig:"COMET_RPS" default:"8"`
+    CometBurst    int           `envconfig:"COMET_BURST" default:"8"`
+    // Telegram streaming edit throttling
+    TGEditThrottleMs int        `envconfig:"TG_EDIT_THROTTLE_MS" default:"900"`
+    TGEditMaxPerMin  int        `envconfig:"TG_EDIT_MAX_PER_MIN" default:"40"`
 }
 
 func Load() (Config, error) {

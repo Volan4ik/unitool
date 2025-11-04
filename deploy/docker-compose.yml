@@ -17,7 +17,7 @@ services:
     env_file: ../.env
     environment:
       # Override DB connection for compose network
-      - DATABASE_URL=postgres://bot:volodya1337!@localhost:5432/bot?sslmode=disable
+      - DATABASE_URL=postgres://bot:bot@db:5432/bot?sslmode=disable
     depends_on: [db]
 volumes:
   pgdata: {}

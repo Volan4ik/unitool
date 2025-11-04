@@ -13,12 +13,19 @@ import (
     tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
     db "unitool/internal/db/generated"
     "unitool/internal/payments"
+    "unitool/pkg/provider"
+    "unitool/internal/rate"
+    "unitool/internal/metrics"
 )
 
 type Router struct {
     Bot    *Bot
     Pay    *payments.Service
     Q      *db.Queries
+    Prov   provider.ModelProvider
+    RL     *rate.Limiter
+    EditThrottle time.Duration
+    EditMaxPerMin int
     mu     sync.RWMutex
     States map[int64]UserState
     State  *ConversationState
@@ -34,8 +41,8 @@ type ConversationState struct {
     Conv map[string]uuid.UUID // key: fmt.Sprintf("%d:%s", userID, kind)
 }
 
-func NewRouter(b *Bot, p *payments.Service, q *db.Queries) *Router {
-    return &Router{Bot: b, Pay: p, Q: q, States: make(map[int64]UserState), State: &ConversationState{Conv: make(map[string]uuid.UUID)}}
+func NewRouter(b *Bot, p *payments.Service, q *db.Queries, prov provider.ModelProvider, rl *rate.Limiter, editThrottle time.Duration, editMaxPerMin int) *Router {
+    return &Router{Bot: b, Pay: p, Q: q, Prov: prov, RL: rl, EditThrottle: editThrottle, EditMaxPerMin: editMaxPerMin, States: make(map[int64]UserState), State: &ConversationState{Conv: make(map[string]uuid.UUID)}}
 }
 
 func (r *Router) HandleUpdate(ctx context.Context, upd tgbotapi.Update) {
@@ -77,20 +84,32 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
     txt := strings.TrimSpace(m.Text)
     switch txt {
     case "Сгенерировать текст":
-        r.setState(userID, UserState{Mode: "text", Model: "GPT-5"})
-        r.sendModelsMenu(m.Chat.ID, "text", "GPT-5")
+        opts := ModelUIList("text")
+        def := "GPT-5"
+        if len(opts) > 0 { def = opts[0] }
+        r.setState(userID, UserState{Mode: "text", Model: def})
+        r.sendModelsMenu(m.Chat.ID, "text", def)
         return
     case "Интернет-поиск":
-        r.setState(userID, UserState{Mode: "search", Model: "Perplexity"})
-        r.sendModelsMenu(m.Chat.ID, "search", "Perplexity")
+        opts := ModelUIList("search")
+        def := "Perplexity"
+        if len(opts) > 0 { def = opts[0] }
+        r.setState(userID, UserState{Mode: "search", Model: def})
+        r.sendModelsMenu(m.Chat.ID, "search", def)
         return
     case "Создать картинку":
-        r.setState(userID, UserState{Mode: "image", Model: "Flux"})
-        r.sendModelsMenu(m.Chat.ID, "image", "Flux")
+        opts := ModelUIList("image")
+        def := "Flux"
+        if len(opts) > 0 { def = opts[0] }
+        r.setState(userID, UserState{Mode: "image", Model: def})
+        r.sendModelsMenu(m.Chat.ID, "image", def)
         return
     case "Создать видео":
-        r.setState(userID, UserState{Mode: "video", Model: "Sora"})
-        r.sendModelsMenu(m.Chat.ID, "video", "Sora")
+        opts := ModelUIList("video")
+        def := "Sora"
+        if len(opts) > 0 { def = opts[0] }
+        r.setState(userID, UserState{Mode: "video", Model: def})
+        r.sendModelsMenu(m.Chat.ID, "video", def)
         return
     case "Создать песню":
         msg := tgbotapi.NewMessage(m.Chat.ID, "Функция пока в разработке")
@@ -122,8 +141,15 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
     st, ok := r.getState(userID)
     if ok && st.Mode != "" && st.Model != "" && txt != "" {
         kind := st.Mode
-        provider := "mock"
-        model := st.Model
+        providerName := "comet"
+        uiModel := st.Model
+        modelID, ok := ResolveModel(kind, uiModel)
+        if !ok || modelID == "" {
+            msg := tgbotapi.NewMessage(m.Chat.ID, "Выбранная модель не поддерживается. Пожалуйста, выберите другую.")
+            msg.ReplyMarkup = MainReplyKeyboard()
+            r.Bot.API.Send(msg)
+            return
+        }
         // Check balance per kind
         bal, err := r.Q.GetBalancesByUserID(ctx, userID)
         if err != nil {
@@ -152,6 +178,11 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
         }
 
         convID := r.ensureConvID(userID, kind)
+        // Global rate limit for provider calls
+        if r.RL != nil && !r.RL.Allow() {
+            r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Сервис перегружен, попробуйте позже."))
+            return
+        }
         // Load history, limit 10
         hist, _ := r.Q.GetLastChatHistory(ctx, db.GetLastChatHistoryParams{
             UserID:        userID,
@@ -165,65 +196,161 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
         }
 
         // Create generation request running
-        gr, _ := r.Q.InsertGenerationRequest(ctx, db.InsertGenerationRequestParams{
+        gr, err := r.Q.InsertGenerationRequest(ctx, db.InsertGenerationRequestParams{
             UserID:      userID,
             Kind:        kind,
-            Provider:    provider,
-            Model:       model,
+            Provider:    providerName,
+            Model:       modelID,
             Status:      "running",
             RequestIDExt: pgtype.Text{},
             PromptHash:   pgtype.Text{},
             InputTokens:  pgtype.Int4{},
         })
+        if err != nil {
+            r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Внутренняя ошибка. Попробуйте позже."))
+            return
+        }
         t0 := time.Now()
         // Log user message
-        _, _ = r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
+        if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
             UserID:             userID,
             ConversationID:     pgtype.UUID{Bytes: convID, Valid: true},
             Kind:               kind,
             Role:               "user",
             ContentText:        pgtype.Text{String: txt, Valid: true},
             AttachmentUrl:      pgtype.Text{},
-            Provider:           pgtype.Text{String: provider, Valid: true},
-            Model:              pgtype.Text{String: model, Valid: true},
+            Provider:           pgtype.Text{String: providerName, Valid: true},
+            Model:              pgtype.Text{String: modelID, Valid: true},
             InputTokens:        pgtype.Int4{},
             OutputTokens:       pgtype.Int4{},
             GenerationRequestID: pgtype.Int8{Int64: gr.ID, Valid: true},
-        })
+        }); err != nil {
+            r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось сохранить историю. Попробуйте позже."))
+            return
+        }
 
-        // Mock provider
-        var out string
-        switch kind {
-        case "text", "search":
-            out = "Эхо: " + txt
-        case "image", "video":
-            out = "Сгенерировано (заглушка) для " + model + ": " + txt
+        // Call provider
+        // Build chat history (role/content) in chronological order
+        history := make([]provider.Message, 0, len(hist))
+        for _, h := range hist {
+            if !h.ContentText.Valid { continue }
+            role := h.Role
+            if role == "" { role = "user" }
+            history = append(history, provider.Message{Role: role, Content: h.ContentText.String})
+        }
+
+        // Provider call with timeout
+        ctxGen, cancel := context.WithTimeout(ctx, 30*time.Second)
+        defer cancel()
+
+        var resp provider.ModelResponse
+        var err error
+        pendingMsgID := 0
+        pendingChatID := m.Chat.ID
+        // Stream for text/search; sync for image/video
+        if kind == "text" || kind == "search" {
+            // Send placeholder message to stream into
+            pending, _ := r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "⌛ Генерирую…"))
+            pendingMsgID = pending.MessageID
+            lastEdit := time.Now()
+            var acc strings.Builder
+            throttle := r.EditThrottle
+            if throttle <= 0 { throttle = 900 * time.Millisecond }
+            edits := 0
+            windowStart := time.Now()
+            onDelta := func(piece string) error {
+                acc.WriteString(piece)
+                // edit no more often than throttle interval
+                if time.Since(lastEdit) >= throttle {
+                    if time.Since(windowStart) >= time.Minute { windowStart = time.Now(); edits = 0 }
+                    if r.EditMaxPerMin <= 0 || edits < r.EditMaxPerMin {
+                        edit := tgbotapi.NewEditMessageText(m.Chat.ID, pending.MessageID, acc.String())
+                        r.Bot.API.Request(edit)
+                        lastEdit = time.Now()
+                        edits++
+                        metrics.StreamEdits.WithLabelValues(kind).Inc()
+                    }
+                }
+                return nil
+            }
+            resp, err = r.Prov.GenerateStream(ctxGen, provider.ModelRequest{
+                UserID:  userID,
+                Input:   txt,
+                Model:   modelID,
+                History: history,
+                Params:  map[string]any{"kind": kind},
+            }, onDelta)
+            // Final edit with complete text if any
+            if acc.Len() > 0 {
+                finalText := acc.String()
+                if finalText != "" {
+                    edit := tgbotapi.NewEditMessageText(m.Chat.ID, pending.MessageID, finalText)
+                    r.Bot.API.Request(edit)
+                }
+            }
+        } else {
+            resp, err = r.Prov.Generate(ctxGen, provider.ModelRequest{
+                UserID:  userID,
+                Input:   txt,
+                Model:   modelID,
+                History: history,
+                Params:  map[string]any{"kind": kind},
+            })
         }
         latency := time.Since(t0).Milliseconds()
+        if err != nil {
+            // Mark failed
+            _ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
+                ID:          gr.ID,
+                Status:      "failed",
+                ErrorMessage: pgtype.Text{String: err.Error(), Valid: true},
+                LatencyMs:   pgtype.Int4{Int32: int32(latency), Valid: true},
+            })
+            if pendingMsgID != 0 {
+                edit := tgbotapi.NewEditMessageText(pendingChatID, pendingMsgID, "Ошибка генерации. Пожалуйста, попробуйте позже.")
+                r.Bot.API.Request(edit)
+            } else {
+                r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Сервис перегружен, попробуйте позже."))
+            }
+            return
+        }
 
         // Success: finish + insert assistant message + spend 1 credit
+        var cText, cImg, cVid, cSearch pgtype.Int4
+        switch kind {
+        case "text":
+            cText = pgtype.Int4{Int32: 1, Valid: true}
+        case "image":
+            cImg = pgtype.Int4{Int32: 1, Valid: true}
+        case "video":
+            cVid = pgtype.Int4{Int32: 1, Valid: true}
+        case "search":
+            cSearch = pgtype.Int4{Int32: 1, Valid: true}
+        }
         _ = r.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
             ID:                gr.ID,
-            OutputTokens:      pgtype.Int4{Int32: 0, Valid: true},
+            OutputTokens:      pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
             LatencyMs:         pgtype.Int4{Int32: int32(latency), Valid: true},
-            CostCreditsText:   func() pgtype.Int4 { if kind=="text" {return pgtype.Int4{Int32:1,Valid:true}}; return pgtype.Int4{} }(),
-            CostCreditsImage:  func() pgtype.Int4 { if kind=="image" {return pgtype.Int4{Int32:1,Valid:true}}; return pgtype.Int4{} }(),
-            CostCreditsVideo:  func() pgtype.Int4 { if kind=="video" {return pgtype.Int4{Int32:1,Valid:true}}; return pgtype.Int4{} }(),
-            CostCreditsSearch: func() pgtype.Int4 { if kind=="search" {return pgtype.Int4{Int32:1,Valid:true}}; return pgtype.Int4{} }(),
+            CostCreditsText:   cText,
+            CostCreditsImage:  cImg,
+            CostCreditsVideo:  cVid,
+            CostCreditsSearch: cSearch,
         })
-        _, _ = r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
+        if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
             UserID:             userID,
             ConversationID:     pgtype.UUID{Bytes: convID, Valid: true},
             Kind:               kind,
             Role:               "assistant",
-            ContentText:        pgtype.Text{String: out, Valid: true},
+            ContentText:        pgtype.Text{String: resp.Output, Valid: true},
             AttachmentUrl:      pgtype.Text{},
-            Provider:           pgtype.Text{String: provider, Valid: true},
-            Model:              pgtype.Text{String: model, Valid: true},
+            Provider:           pgtype.Text{String: providerName, Valid: true},
+            Model:              pgtype.Text{String: modelID, Valid: true},
             InputTokens:        pgtype.Int4{},
-            OutputTokens:       pgtype.Int4{},
+            OutputTokens:       pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
             GenerationRequestID: pgtype.Int8{Int64: gr.ID, Valid: true},
-        })
+        }); err != nil {
+            r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось сохранить ответ в историю."))
+        }
         meta, _ := json.Marshal(map[string]any{"gen_id": gr.ID})
         switch kind {
         case "text":
@@ -236,10 +363,12 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
             _ = r.Q.SpendVideo(ctx, db.SpendVideoParams{UserID: userID, Meta: meta})
         }
 
-        // Respond to user
-        msg := tgbotapi.NewMessage(m.Chat.ID, out)
-        msg.ReplyMarkup = MainReplyKeyboard()
-        r.Bot.API.Send(msg)
+        // Respond to user if not already streamed
+        if !(kind == "text" || kind == "search") {
+            msg := tgbotapi.NewMessage(m.Chat.ID, resp.Output)
+            msg.ReplyMarkup = MainReplyKeyboard()
+            r.Bot.API.Send(msg)
+        }
         return
     }
 
@@ -292,7 +421,9 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
     case "mode":
         if len(parts) < 2 { return }
         mode := parts[1]
-        def := map[string]string{"text": "GPT-5", "search": "Perplexity", "image": "Flux", "video": "Sora"}[mode]
+        list := ModelUIList(mode)
+        def := ""
+        if len(list) > 0 { def = list[0] }
         r.setState(u.ID, UserState{Mode: mode, Model: def})
         // edit inline keyboard on the same message
         kb := ModelsInlineKeyboard(mode, def)
@@ -302,7 +433,9 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
         if len(parts) < 3 { return }
         mode := parts[1]
         model := parts[2]
-        r.setState(u.ID, UserState{Mode: mode, Model: model})
+        if _, ok := ResolveModel(mode, model); ok {
+            r.setState(u.ID, UserState{Mode: mode, Model: model})
+        }
         kb := ModelsInlineKeyboard(mode, model)
         edit := tgbotapi.NewEditMessageReplyMarkup(chatID, cq.Message.MessageID, kb)
         r.Bot.API.Request(edit)
