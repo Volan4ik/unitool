@@ -3,7 +3,7 @@ INSERT INTO generation_requests (
   user_id, kind, provider, model, request_id_ext, prompt_hash,
   input_tokens, status, created_at
 ) VALUES (
-  $1,$2,$3,$4,$5,$6,$7,$8, now()
+  $1,$2::gen_type,$3,$4,$5,$6,$7,$8, now()
 ) RETURNING *;
 
 -- name: FinishGenerationRequest :exec

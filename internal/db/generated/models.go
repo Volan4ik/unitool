@@ -54,6 +54,28 @@ type CreditLedger struct {
 	Reason      interface{}        `json:"reason"`
 	Meta        []byte             `json:"meta"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	OpKey       pgtype.Text        `json:"op_key"`
+}
+
+type GenerationJob struct {
+	ID                  int64              `json:"id"`
+	GenerationRequestID int64              `json:"generation_request_id"`
+	UserID              int64              `json:"user_id"`
+	ChatID              int64              `json:"chat_id"`
+	ConversationID      pgtype.UUID        `json:"conversation_id"`
+	Kind                string             `json:"kind"`
+	Provider            string             `json:"provider"`
+	Model               string             `json:"model"`
+	Prompt              string             `json:"prompt"`
+	Status              interface{}        `json:"status"`
+	ResultText          pgtype.Text        `json:"result_text"`
+	ErrorMessage        pgtype.Text        `json:"error_message"`
+	Attempts            int32              `json:"attempts"`
+	MaxAttempts         int32              `json:"max_attempts"`
+	NextAttemptAt       pgtype.Timestamptz `json:"next_attempt_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	FinishedAt          pgtype.Timestamptz `json:"finished_at"`
 }
 
 type GenerationRequest struct {
@@ -70,7 +92,7 @@ type GenerationRequest struct {
 	CostCreditsImage  pgtype.Int4        `json:"cost_credits_image"`
 	CostCreditsVideo  pgtype.Int4        `json:"cost_credits_video"`
 	CostCreditsSearch pgtype.Int4        `json:"cost_credits_search"`
-	Status            string             `json:"status"`
+	Status            interface{}        `json:"status"`
 	ErrorMessage      pgtype.Text        `json:"error_message"`
 	LatencyMs         pgtype.Int4        `json:"latency_ms"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
@@ -129,6 +151,22 @@ type User struct {
 	SearchBalance int32              `json:"search_balance"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserConversation struct {
+	UserID         int64              `json:"user_id"`
+	Kind           string             `json:"kind"`
+	ConversationID pgtype.UUID        `json:"conversation_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserSession struct {
+	UserID    int64              `json:"user_id"`
+	Mode      string             `json:"mode"`
+	Model     string             `json:"model"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type VOrderBrief struct {

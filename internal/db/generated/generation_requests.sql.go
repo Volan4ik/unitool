@@ -108,7 +108,7 @@ WHERE id = $1
 
 type FailGenerationRequestParams struct {
 	ID           int64       `json:"id"`
-	Status       string      `json:"status"`
+	Status       interface{} `json:"status"`
 	ErrorMessage pgtype.Text `json:"error_message"`
 	LatencyMs    pgtype.Int4 `json:"latency_ms"`
 }
@@ -164,25 +164,25 @@ INSERT INTO generation_requests (
   user_id, kind, provider, model, request_id_ext, prompt_hash,
   input_tokens, status, created_at
 ) VALUES (
-  $1,$2,$3,$4,$5,$6,$7,$8, now()
+  $1,$2::gen_type,$3,$4,$5,$6,$7,$8, now()
 ) RETURNING id, user_id, kind, provider, model, request_id_ext, prompt_hash, input_tokens, output_tokens, cost_credits_text, cost_credits_image, cost_credits_video, cost_credits_search, status, error_message, latency_ms, created_at, finished_at
 `
 
 type InsertGenerationRequestParams struct {
 	UserID       int64       `json:"user_id"`
-	Kind         interface{} `json:"kind"`
+	Column2      interface{} `json:"column_2"`
 	Provider     string      `json:"provider"`
 	Model        string      `json:"model"`
 	RequestIDExt pgtype.Text `json:"request_id_ext"`
 	PromptHash   pgtype.Text `json:"prompt_hash"`
 	InputTokens  pgtype.Int4 `json:"input_tokens"`
-	Status       string      `json:"status"`
+	Status       interface{} `json:"status"`
 }
 
 func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerationRequestParams) (GenerationRequest, error) {
 	row := q.db.QueryRow(ctx, insertGenerationRequest,
 		arg.UserID,
-		arg.Kind,
+		arg.Column2,
 		arg.Provider,
 		arg.Model,
 		arg.RequestIDExt,

@@ -4,8 +4,10 @@ sql:
   - engine: postgresql
     queries: "internal/db/queries/*.sql"
     schema:
-      - "migrations/schema.sql"
+      - "migrations/0001_schema.sql"
       - "migrations/0003_chat_messages.sql"
+      - "migrations/0005_state_and_jobs.sql"
+      - "migrations/0006_hardening.sql"
     gen:
       go:
         package: generated

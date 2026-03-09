@@ -40,8 +40,9 @@ func (q *Queries) AddAdminGrant(ctx context.Context, arg AddAdminGrantParams) er
 
 const addPurchaseCredits = `-- name: AddPurchaseCredits :exec
 INSERT INTO credit_ledger (user_id, order_id,
-  delta_text, delta_image, delta_video, delta_search, reason, meta)
-VALUES ($1,$2,$3,$4,$5,$6,'purchase',$7)
+  delta_text, delta_image, delta_video, delta_search, reason, meta, op_key)
+VALUES ($1,$2,$3,$4,$5,$6,'purchase',$7,$8)
+ON CONFLICT (op_key) DO NOTHING
 `
 
 type AddPurchaseCreditsParams struct {
@@ -52,6 +53,7 @@ type AddPurchaseCreditsParams struct {
 	DeltaVideo  int32       `json:"delta_video"`
 	DeltaSearch int32       `json:"delta_search"`
 	Meta        []byte      `json:"meta"`
+	OpKey       pgtype.Text `json:"op_key"`
 }
 
 func (q *Queries) AddPurchaseCredits(ctx context.Context, arg AddPurchaseCreditsParams) error {
@@ -63,14 +65,16 @@ func (q *Queries) AddPurchaseCredits(ctx context.Context, arg AddPurchaseCredits
 		arg.DeltaVideo,
 		arg.DeltaSearch,
 		arg.Meta,
+		arg.OpKey,
 	)
 	return err
 }
 
 const addRefund = `-- name: AddRefund :exec
 INSERT INTO credit_ledger (user_id, order_id,
-  delta_text, delta_image, delta_video, delta_search, reason, meta)
-VALUES ($1,$2,$3,$4,$5,$6,'refund',$7)
+  delta_text, delta_image, delta_video, delta_search, reason, meta, op_key)
+VALUES ($1,$2,$3,$4,$5,$6,'refund',$7,$8)
+ON CONFLICT (op_key) DO NOTHING
 `
 
 type AddRefundParams struct {
@@ -81,6 +85,7 @@ type AddRefundParams struct {
 	DeltaVideo  int32       `json:"delta_video"`
 	DeltaSearch int32       `json:"delta_search"`
 	Meta        []byte      `json:"meta"`
+	OpKey       pgtype.Text `json:"op_key"`
 }
 
 func (q *Queries) AddRefund(ctx context.Context, arg AddRefundParams) error {
@@ -92,12 +97,13 @@ func (q *Queries) AddRefund(ctx context.Context, arg AddRefundParams) error {
 		arg.DeltaVideo,
 		arg.DeltaSearch,
 		arg.Meta,
+		arg.OpKey,
 	)
 	return err
 }
 
 const getUserLedger = `-- name: GetUserLedger :many
-SELECT id, user_id, order_id, gen_kind, delta_text, delta_image, delta_video, delta_search, reason, meta, created_at FROM credit_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int
+SELECT id, user_id, order_id, gen_kind, delta_text, delta_image, delta_video, delta_search, reason, meta, created_at, op_key FROM credit_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int
 `
 
 type GetUserLedgerParams struct {
@@ -127,6 +133,7 @@ func (q *Queries) GetUserLedger(ctx context.Context, arg GetUserLedgerParams) ([
 			&i.Reason,
 			&i.Meta,
 			&i.CreatedAt,
+			&i.OpKey,
 		); err != nil {
 			return nil, err
 		}
@@ -138,63 +145,139 @@ func (q *Queries) GetUserLedger(ctx context.Context, arg GetUserLedgerParams) ([
 	return items, nil
 }
 
+const refundImage = `-- name: RefundImage :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_image, reason, meta, op_key)
+VALUES ($1,'image',1,'refund',$2,$3)
+ON CONFLICT (op_key) DO NOTHING
+`
+
+type RefundImageParams struct {
+	UserID int64       `json:"user_id"`
+	Meta   []byte      `json:"meta"`
+	OpKey  pgtype.Text `json:"op_key"`
+}
+
+func (q *Queries) RefundImage(ctx context.Context, arg RefundImageParams) error {
+	_, err := q.db.Exec(ctx, refundImage, arg.UserID, arg.Meta, arg.OpKey)
+	return err
+}
+
+const refundSearch = `-- name: RefundSearch :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_search, reason, meta, op_key)
+VALUES ($1,'search',1,'refund',$2,$3)
+ON CONFLICT (op_key) DO NOTHING
+`
+
+type RefundSearchParams struct {
+	UserID int64       `json:"user_id"`
+	Meta   []byte      `json:"meta"`
+	OpKey  pgtype.Text `json:"op_key"`
+}
+
+func (q *Queries) RefundSearch(ctx context.Context, arg RefundSearchParams) error {
+	_, err := q.db.Exec(ctx, refundSearch, arg.UserID, arg.Meta, arg.OpKey)
+	return err
+}
+
+const refundText = `-- name: RefundText :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_text, reason, meta, op_key)
+VALUES ($1,'text',1,'refund',$2,$3)
+ON CONFLICT (op_key) DO NOTHING
+`
+
+type RefundTextParams struct {
+	UserID int64       `json:"user_id"`
+	Meta   []byte      `json:"meta"`
+	OpKey  pgtype.Text `json:"op_key"`
+}
+
+func (q *Queries) RefundText(ctx context.Context, arg RefundTextParams) error {
+	_, err := q.db.Exec(ctx, refundText, arg.UserID, arg.Meta, arg.OpKey)
+	return err
+}
+
+const refundVideo = `-- name: RefundVideo :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
+VALUES ($1,'video',1,'refund',$2,$3)
+ON CONFLICT (op_key) DO NOTHING
+`
+
+type RefundVideoParams struct {
+	UserID int64       `json:"user_id"`
+	Meta   []byte      `json:"meta"`
+	OpKey  pgtype.Text `json:"op_key"`
+}
+
+func (q *Queries) RefundVideo(ctx context.Context, arg RefundVideoParams) error {
+	_, err := q.db.Exec(ctx, refundVideo, arg.UserID, arg.Meta, arg.OpKey)
+	return err
+}
+
 const spendImage = `-- name: SpendImage :exec
-INSERT INTO credit_ledger (user_id, gen_kind, delta_image, reason, meta)
-VALUES ($1,'image',-1,'spend',$2)
+INSERT INTO credit_ledger (user_id, gen_kind, delta_image, reason, meta, op_key)
+VALUES ($1,'image',-1,'spend',$2,$3)
+ON CONFLICT (op_key) DO NOTHING
 `
 
 type SpendImageParams struct {
-	UserID int64  `json:"user_id"`
-	Meta   []byte `json:"meta"`
+	UserID int64       `json:"user_id"`
+	Meta   []byte      `json:"meta"`
+	OpKey  pgtype.Text `json:"op_key"`
 }
 
 func (q *Queries) SpendImage(ctx context.Context, arg SpendImageParams) error {
-	_, err := q.db.Exec(ctx, spendImage, arg.UserID, arg.Meta)
+	_, err := q.db.Exec(ctx, spendImage, arg.UserID, arg.Meta, arg.OpKey)
 	return err
 }
 
 const spendSearch = `-- name: SpendSearch :exec
-INSERT INTO credit_ledger (user_id, gen_kind, delta_search, reason, meta)
-VALUES ($1,'search',-1,'spend',$2)
+INSERT INTO credit_ledger (user_id, gen_kind, delta_search, reason, meta, op_key)
+VALUES ($1,'search',-1,'spend',$2,$3)
+ON CONFLICT (op_key) DO NOTHING
 `
 
 type SpendSearchParams struct {
-	UserID int64  `json:"user_id"`
-	Meta   []byte `json:"meta"`
+	UserID int64       `json:"user_id"`
+	Meta   []byte      `json:"meta"`
+	OpKey  pgtype.Text `json:"op_key"`
 }
 
 func (q *Queries) SpendSearch(ctx context.Context, arg SpendSearchParams) error {
-	_, err := q.db.Exec(ctx, spendSearch, arg.UserID, arg.Meta)
+	_, err := q.db.Exec(ctx, spendSearch, arg.UserID, arg.Meta, arg.OpKey)
 	return err
 }
 
 const spendText = `-- name: SpendText :exec
-INSERT INTO credit_ledger (user_id, gen_kind, delta_text, reason, meta)
-VALUES ($1,'text',-1,'spend',$2)
+INSERT INTO credit_ledger (user_id, gen_kind, delta_text, reason, meta, op_key)
+VALUES ($1,'text',-1,'spend',$2,$3)
+ON CONFLICT (op_key) DO NOTHING
 `
 
 type SpendTextParams struct {
-	UserID int64  `json:"user_id"`
-	Meta   []byte `json:"meta"`
+	UserID int64       `json:"user_id"`
+	Meta   []byte      `json:"meta"`
+	OpKey  pgtype.Text `json:"op_key"`
 }
 
 func (q *Queries) SpendText(ctx context.Context, arg SpendTextParams) error {
-	_, err := q.db.Exec(ctx, spendText, arg.UserID, arg.Meta)
+	_, err := q.db.Exec(ctx, spendText, arg.UserID, arg.Meta, arg.OpKey)
 	return err
 }
 
 const spendVideo = `-- name: SpendVideo :exec
-INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta)
-VALUES ($1,'video',-1,'spend',$2)
+INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
+VALUES ($1,'video',-1,'spend',$2,$3)
+ON CONFLICT (op_key) DO NOTHING
 `
 
 type SpendVideoParams struct {
-	UserID int64  `json:"user_id"`
-	Meta   []byte `json:"meta"`
+	UserID int64       `json:"user_id"`
+	Meta   []byte      `json:"meta"`
+	OpKey  pgtype.Text `json:"op_key"`
 }
 
 func (q *Queries) SpendVideo(ctx context.Context, arg SpendVideoParams) error {
-	_, err := q.db.Exec(ctx, spendVideo, arg.UserID, arg.Meta)
+	_, err := q.db.Exec(ctx, spendVideo, arg.UserID, arg.Meta, arg.OpKey)
 	return err
 }
 

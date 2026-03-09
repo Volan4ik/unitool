@@ -1,7 +1,8 @@
 -- name: AddPurchaseCredits :exec
 INSERT INTO credit_ledger (user_id, order_id,
-  delta_text, delta_image, delta_video, delta_search, reason, meta)
-VALUES ($1,$2,$3,$4,$5,$6,'purchase',$7);
+  delta_text, delta_image, delta_video, delta_search, reason, meta, op_key)
+VALUES ($1,$2,$3,$4,$5,$6,'purchase',$7,$8)
+ON CONFLICT (op_key) DO NOTHING;
 
 -- name: AddAdminGrant :exec
 INSERT INTO credit_ledger (user_id,
@@ -10,24 +11,49 @@ VALUES ($1,$2,$3,$4,$5,'admin_grant',$6);
 
 -- name: AddRefund :exec
 INSERT INTO credit_ledger (user_id, order_id,
-  delta_text, delta_image, delta_video, delta_search, reason, meta)
-VALUES ($1,$2,$3,$4,$5,$6,'refund',$7);
+  delta_text, delta_image, delta_video, delta_search, reason, meta, op_key)
+VALUES ($1,$2,$3,$4,$5,$6,'refund',$7,$8)
+ON CONFLICT (op_key) DO NOTHING;
 
 -- name: SpendText :exec
-INSERT INTO credit_ledger (user_id, gen_kind, delta_text, reason, meta)
-VALUES ($1,'text',-1,'spend',$2);
+INSERT INTO credit_ledger (user_id, gen_kind, delta_text, reason, meta, op_key)
+VALUES ($1,'text',-1,'spend',$2,$3)
+ON CONFLICT (op_key) DO NOTHING;
 
 -- name: SpendImage :exec
-INSERT INTO credit_ledger (user_id, gen_kind, delta_image, reason, meta)
-VALUES ($1,'image',-1,'spend',$2);
+INSERT INTO credit_ledger (user_id, gen_kind, delta_image, reason, meta, op_key)
+VALUES ($1,'image',-1,'spend',$2,$3)
+ON CONFLICT (op_key) DO NOTHING;
 
 -- name: SpendVideo :exec
-INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta)
-VALUES ($1,'video',-1,'spend',$2);
+INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
+VALUES ($1,'video',-1,'spend',$2,$3)
+ON CONFLICT (op_key) DO NOTHING;
 
 -- name: SpendSearch :exec
-INSERT INTO credit_ledger (user_id, gen_kind, delta_search, reason, meta)
-VALUES ($1,'search',-1,'spend',$2);
+INSERT INTO credit_ledger (user_id, gen_kind, delta_search, reason, meta, op_key)
+VALUES ($1,'search',-1,'spend',$2,$3)
+ON CONFLICT (op_key) DO NOTHING;
+
+-- name: RefundText :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_text, reason, meta, op_key)
+VALUES ($1,'text',1,'refund',$2,$3)
+ON CONFLICT (op_key) DO NOTHING;
+
+-- name: RefundImage :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_image, reason, meta, op_key)
+VALUES ($1,'image',1,'refund',$2,$3)
+ON CONFLICT (op_key) DO NOTHING;
+
+-- name: RefundVideo :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
+VALUES ($1,'video',1,'refund',$2,$3)
+ON CONFLICT (op_key) DO NOTHING;
+
+-- name: RefundSearch :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_search, reason, meta, op_key)
+VALUES ($1,'search',1,'refund',$2,$3)
+ON CONFLICT (op_key) DO NOTHING;
 
 -- name: GetUserLedger :many
 SELECT * FROM credit_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int;

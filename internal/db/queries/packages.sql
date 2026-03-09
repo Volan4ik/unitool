@@ -30,7 +30,7 @@ UPDATE packages SET is_active = FALSE, updated_at = now() WHERE id = $1;
 
 INSERT INTO packages(code, title, price_rub, text_credits, image_credits, video_credits, search_credits)
 VALUES
-  ('starter', 'Стартовый пакет', 199, 50, 0, 0, 50),
+  ('starter', 'Стартовый пакет', 199, 50, 0, 0, 0),
   ('media',   'Фото+Видео',       499, 0, 10, 5, 0),
-  ('protxt',  'Текст PRO',       1490, 300, 0, 0, 300)
+  ('protxt',  'Текст PRO',       1490, 300, 0, 0, 0)
 ON CONFLICT (code) DO NOTHING;
