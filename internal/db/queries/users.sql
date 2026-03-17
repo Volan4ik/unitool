@@ -19,7 +19,7 @@ SELECT * FROM users WHERE id = $1;
 UPDATE users SET media_agreed = true, updated_at = now() WHERE id = $1;
 
 -- name: GetBalancesByUserID :one
-SELECT text_balance, image_balance, video_balance, search_balance FROM users WHERE id = $1;
+SELECT text_balance, image_balance, video_balance FROM users WHERE id = $1;
 
 -- name: GetAdmins :many
 SELECT id, tg_id FROM users WHERE is_admin = TRUE;

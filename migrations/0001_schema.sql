@@ -4,7 +4,22 @@ CREATE EXTENSION IF NOT EXISTS citext;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'gen_type') THEN
-    CREATE TYPE gen_type AS ENUM ('text','image','video','search');
+    CREATE TYPE gen_type AS ENUM ('text','image','video');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'gen_request_status') THEN
+    CREATE TYPE gen_request_status AS ENUM (
+      'queued',
+      'running',
+      'ok',
+      'failed',
+      'failed_balance',
+      'failed_queue'
+    );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'gen_job_status') THEN
+    CREATE TYPE gen_job_status AS ENUM ('queued', 'running', 'done', 'failed');
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_status') THEN
@@ -33,10 +48,9 @@ CREATE TABLE IF NOT EXISTS users (
   email          citext,
   is_admin       boolean NOT NULL DEFAULT false,
   media_agreed   boolean NOT NULL DEFAULT false,
-  text_balance   integer NOT NULL DEFAULT 0,
-  image_balance  integer NOT NULL DEFAULT 0,
-  video_balance  integer NOT NULL DEFAULT 0,
-  search_balance integer NOT NULL DEFAULT 0,
+  text_balance   integer NOT NULL DEFAULT 0 CHECK (text_balance >= 0),
+  image_balance  integer NOT NULL DEFAULT 0 CHECK (image_balance >= 0),
+  video_balance  integer NOT NULL DEFAULT 0 CHECK (video_balance >= 0),
 
   created_at     timestamptz NOT NULL DEFAULT now(),
   updated_at     timestamptz NOT NULL DEFAULT now()
@@ -54,11 +68,10 @@ CREATE TABLE IF NOT EXISTS packages (
   id              BIGSERIAL PRIMARY KEY,
   code            text UNIQUE NOT NULL,
   title           text NOT NULL,
-  price_rub       integer NOT NULL,
-  text_credits    integer NOT NULL DEFAULT 0,
-  image_credits   integer NOT NULL DEFAULT 0,
-  video_credits   integer NOT NULL DEFAULT 0,
-  search_credits  integer NOT NULL DEFAULT 0,
+  price_rub       integer NOT NULL CHECK (price_rub >= 0),
+  text_credits    integer NOT NULL DEFAULT 0 CHECK (text_credits >= 0),
+  image_credits   integer NOT NULL DEFAULT 0 CHECK (image_credits >= 0),
+  video_credits   integer NOT NULL DEFAULT 0 CHECK (video_credits >= 0),
   is_active       boolean NOT NULL DEFAULT true,
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now()
@@ -69,21 +82,11 @@ CREATE TRIGGER trg_packages_set_updated
 BEFORE UPDATE ON packages
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- ---------------------------------------------------------------------
--- Default packages (seed)
--- ---------------------------------------------------------------------
-INSERT INTO packages(code, title, price_rub, text_credits, image_credits, video_credits, search_credits)
-VALUES
-  ('starter', 'Стартовый пакет', 199, 50, 0, 0, 0),
-  ('media',   'Фото+Видео',       499, 0, 10, 5, 0),
-  ('protxt',  'Текст PRO',       1490, 300, 0, 0, 0)
-ON CONFLICT (code) DO NOTHING;
-
 CREATE TABLE IF NOT EXISTS orders (
   id                             uuid PRIMARY KEY DEFAULT uuid_generate_v4(),  -- = payload
   user_id                        BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   package_id                     BIGINT NOT NULL REFERENCES packages(id) ON DELETE RESTRICT,
-  amount_rub                     integer NOT NULL,
+  amount_rub                     integer NOT NULL CHECK (amount_rub >= 0),
   currency                       text NOT NULL DEFAULT 'RUB',
   status                         order_status NOT NULL,
   tg_invoice_msg_id              BIGINT,
@@ -108,10 +111,11 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
   delta_text     integer NOT NULL DEFAULT 0,
   delta_image    integer NOT NULL DEFAULT 0,
   delta_video    integer NOT NULL DEFAULT 0,
-  delta_search   integer NOT NULL DEFAULT 0,
   reason         ledger_reason NOT NULL,
   meta           jsonb,                  
-  created_at     timestamptz NOT NULL DEFAULT now()
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT credit_ledger_nonzero_delta
+    CHECK (delta_text <> 0 OR delta_image <> 0 OR delta_video <> 0)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON credit_ledger(user_id, created_at);
@@ -125,7 +129,6 @@ BEGIN
     text_balance   = text_balance   + NEW.delta_text,
     image_balance  = image_balance  + NEW.delta_image,
     video_balance  = video_balance  + NEW.delta_video,
-    search_balance = search_balance + NEW.delta_search,
     updated_at     = now()
   WHERE id = NEW.user_id;
 
@@ -146,7 +149,6 @@ BEGIN
   IF (u.text_balance   + NEW.delta_text)   < 0 THEN RAISE EXCEPTION 'Not enough text credits'; END IF;
   IF (u.image_balance  + NEW.delta_image)  < 0 THEN RAISE EXCEPTION 'Not enough image credits'; END IF;
   IF (u.video_balance  + NEW.delta_video)  < 0 THEN RAISE EXCEPTION 'Not enough video credits'; END IF;
-  IF (u.search_balance + NEW.delta_search) < 0 THEN RAISE EXCEPTION 'Not enough search credits'; END IF;
   RETURN NEW;
 END$$ LANGUAGE plpgsql;
 
@@ -154,7 +156,7 @@ DROP TRIGGER IF EXISTS trg_ledger_prevent_negative ON credit_ledger;
 CREATE TRIGGER trg_ledger_prevent_negative
 BEFORE INSERT ON credit_ledger
 FOR EACH ROW
-WHEN (NEW.delta_text < 0 OR NEW.delta_image < 0 OR NEW.delta_video < 0 OR NEW.delta_search < 0)
+WHEN (NEW.delta_text < 0 OR NEW.delta_image < 0 OR NEW.delta_video < 0)
 EXECUTE FUNCTION prevent_negative_balances();
 
 CREATE TABLE IF NOT EXISTS generation_requests (
@@ -165,15 +167,14 @@ CREATE TABLE IF NOT EXISTS generation_requests (
   model                text NOT NULL,
   request_id_ext       text,
   prompt_hash          text,
-  input_tokens         integer,
-  output_tokens        integer,
-  cost_credits_text    integer DEFAULT 0,
-  cost_credits_image   integer DEFAULT 0,
-  cost_credits_video   integer DEFAULT 0,
-  cost_credits_search  integer DEFAULT 0,
-  status               text NOT NULL,
+  input_tokens         integer CHECK (input_tokens IS NULL OR input_tokens >= 0),
+  output_tokens        integer CHECK (output_tokens IS NULL OR output_tokens >= 0),
+  cost_credits_text    integer DEFAULT 0 CHECK (cost_credits_text >= 0),
+  cost_credits_image   integer DEFAULT 0 CHECK (cost_credits_image >= 0),
+  cost_credits_video   integer DEFAULT 0 CHECK (cost_credits_video >= 0),
+  status               gen_request_status NOT NULL,
   error_message        text,
-  latency_ms           integer,
+  latency_ms           integer CHECK (latency_ms IS NULL OR latency_ms >= 0),
   created_at           timestamptz NOT NULL DEFAULT now(),
   finished_at          timestamptz
 );
@@ -202,7 +203,8 @@ CREATE TABLE IF NOT EXISTS admin_broadcast_deliveries (
   broadcast_id   BIGINT NOT NULL REFERENCES admin_broadcasts(id) ON DELETE CASCADE,
   user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   delivered_at   timestamptz,
-  error          text
+  error          text,
+  UNIQUE (broadcast_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_brd_deliv_brc ON admin_broadcast_deliveries(broadcast_id);
 CREATE INDEX IF NOT EXISTS idx_brd_deliv_user ON admin_broadcast_deliveries(user_id);
@@ -216,7 +218,6 @@ CREATE TABLE IF NOT EXISTS settings (
 INSERT INTO settings(key, value) VALUES
   ('free', jsonb_build_object(
       'text_per_month',   10,
-      'search_per_month', 10,
       'image_per_month',  3,
       'video_per_month',  1
   ))
@@ -230,7 +231,6 @@ SELECT
   u.text_balance,
   u.image_balance,
   u.video_balance,
-  u.search_balance,
   u.created_at,
   u.updated_at
 FROM users u;

@@ -41,30 +41,24 @@ func (q *Queries) GetAdmins(ctx context.Context) ([]GetAdminsRow, error) {
 }
 
 const getBalancesByUserID = `-- name: GetBalancesByUserID :one
-SELECT text_balance, image_balance, video_balance, search_balance FROM users WHERE id = $1
+SELECT text_balance, image_balance, video_balance FROM users WHERE id = $1
 `
 
 type GetBalancesByUserIDRow struct {
-	TextBalance   int32 `json:"text_balance"`
-	ImageBalance  int32 `json:"image_balance"`
-	VideoBalance  int32 `json:"video_balance"`
-	SearchBalance int32 `json:"search_balance"`
+	TextBalance  int32 `json:"text_balance"`
+	ImageBalance int32 `json:"image_balance"`
+	VideoBalance int32 `json:"video_balance"`
 }
 
 func (q *Queries) GetBalancesByUserID(ctx context.Context, id int64) (GetBalancesByUserIDRow, error) {
 	row := q.db.QueryRow(ctx, getBalancesByUserID, id)
 	var i GetBalancesByUserIDRow
-	err := row.Scan(
-		&i.TextBalance,
-		&i.ImageBalance,
-		&i.VideoBalance,
-		&i.SearchBalance,
-	)
+	err := row.Scan(&i.TextBalance, &i.ImageBalance, &i.VideoBalance)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, media_agreed, text_balance, image_balance, video_balance, search_balance, created_at, updated_at FROM users WHERE id = $1
+SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
@@ -83,7 +77,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.TextBalance,
 		&i.ImageBalance,
 		&i.VideoBalance,
-		&i.SearchBalance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -91,7 +84,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 }
 
 const getUserByTGID = `-- name: GetUserByTGID :one
-SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, media_agreed, text_balance, image_balance, video_balance, search_balance, created_at, updated_at FROM users WHERE tg_id = $1
+SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at FROM users WHERE tg_id = $1
 `
 
 func (q *Queries) GetUserByTGID(ctx context.Context, tgID int64) (User, error) {
@@ -110,7 +103,6 @@ func (q *Queries) GetUserByTGID(ctx context.Context, tgID int64) (User, error) {
 		&i.TextBalance,
 		&i.ImageBalance,
 		&i.VideoBalance,
-		&i.SearchBalance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -135,7 +127,7 @@ ON CONFLICT (tg_id) DO UPDATE SET
     last_name = EXCLUDED.last_name,
     lang_code = EXCLUDED.lang_code,
     updated_at = now()
-RETURNING id, tg_id, username, first_name, last_name, lang_code, email, is_admin, media_agreed, text_balance, image_balance, video_balance, search_balance, created_at, updated_at
+RETURNING id, tg_id, username, first_name, last_name, lang_code, email, is_admin, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at
 `
 
 type UpsertUserByTGIDParams struct {
@@ -168,7 +160,6 @@ func (q *Queries) UpsertUserByTGID(ctx context.Context, arg UpsertUserByTGIDPara
 		&i.TextBalance,
 		&i.ImageBalance,
 		&i.VideoBalance,
-		&i.SearchBalance,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

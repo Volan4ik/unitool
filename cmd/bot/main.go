@@ -13,14 +13,17 @@ import (
 	"unitool/internal/config"
 	db "unitool/internal/db/generated"
 	"unitool/internal/generation"
+	"unitool/internal/health"
 	"unitool/internal/logger"
 	"unitool/internal/metrics"
 	"unitool/internal/moderation"
 	"unitool/internal/payments"
 	"unitool/internal/rate"
+	"unitool/internal/retention"
 	"unitool/internal/storage"
 	"unitool/internal/telegram"
 	"unitool/internal/weekly"
+	"unitool/internal/workers"
 	cometprov "unitool/pkg/provider/comet"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -38,11 +41,13 @@ func main() {
 	}
 
 	ctx := context.Background()
-	pg, err := storage.New(ctx, cfg.DBURL)
+	pg, err := storage.New(ctx, cfg.DBURL, cfg.DBMaxConns, cfg.DBMinConns)
 	if err != nil {
 		logg.Fatal().Err(err).Msg("pg connect")
 	}
 	defer pg.Close()
+
+	health.New(cfg.HTTPAddr, pg).Start()
 
 	bot, err := telegram.New(cfg.TelegramToken)
 	if err != nil {
@@ -57,7 +62,7 @@ func main() {
 	}
 
 	queries := db.New(pg.Pool)
-	pay := payments.NewService(bot.API, cfg.ProviderToken, queries)
+	pay := payments.NewService(bot.API, cfg.ProviderToken, pg.Pool, queries)
 	// Comet provider (OpenAI-compatible endpoints; minimal wiring)
 	comet := cometprov.New(cfg.CometBase, cfg.CometKey, cfg.CometTimeout)
 	// Global provider rate limit
@@ -84,6 +89,16 @@ func main() {
 	// Weekly free text generations
 	weeklySvc := weekly.NewService(pg, cfg.WeeklyCronAtUTC, cfg.WeeklyTextGenerations)
 	weeklySvc.Start(ctx)
+	if cfg.RetentionEnabled {
+		ret := retention.NewService(
+			pg,
+			cfg.RetentionDailyAtUTC,
+			cfg.RetentionKeepChatDays,
+			cfg.RetentionKeepCreditLedgerDays,
+			cfg.RetentionKeepRequestDays,
+		)
+		ret.Start(ctx)
+	}
 
 	// Webhook-less: Long Polling (для старта просто)
 	bot.DeleteWebhook()
@@ -96,9 +111,15 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 
+	updatePool := workers.NewPool(cfg.QueueBuffer, cfg.MaxWorkers)
+
 	go func() {
 		for upd := range updates {
-			router.HandleUpdate(ctx, upd)
+			upd := upd
+			updatePool.Submit(func(context.Context) error {
+				router.HandleUpdate(ctx, upd)
+				return nil
+			})
 		}
 	}()
 

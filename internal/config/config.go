@@ -13,6 +13,8 @@ type Config struct {
 	ProviderToken   string        `envconfig:"PROVIDER_TOKEN" required:"true"` // BotFather payments token
 	WebhookURL      string        `envconfig:"WEBHOOK_URL" default:""`
 	DBURL           string        `envconfig:"DATABASE_URL" required:"true"`
+	DBMaxConns      int           `envconfig:"DB_MAX_CONNS" default:"120"`
+	DBMinConns      int           `envconfig:"DB_MIN_CONNS" default:"20"`
 	MaxWorkers      int           `envconfig:"MAX_WORKERS" default:"64"`
 	QueueBuffer     int           `envconfig:"QUEUE_BUFFER" default:"1024"`
 	RateRPS         int           `envconfig:"RATE_RPS" default:"200"`
@@ -41,6 +43,12 @@ type Config struct {
 	OpenAIKey         string        `envconfig:"OPENAI_API_KEY" default:""`
 	ModerationModel   string        `envconfig:"MODERATION_MODEL" default:"omni-moderation-latest"`
 	ModerationTimeout time.Duration `envconfig:"MODERATION_TIMEOUT" default:"12s"`
+	// Retention cleanup job
+	RetentionEnabled              bool   `envconfig:"RETENTION_ENABLED" default:"true"`
+	RetentionDailyAtUTC           string `envconfig:"RETENTION_DAILY_AT_UTC" default:"04:10"`
+	RetentionKeepChatDays         int    `envconfig:"RETENTION_KEEP_CHAT_DAYS" default:"180"`
+	RetentionKeepCreditLedgerDays int    `envconfig:"RETENTION_KEEP_CREDIT_LEDGER_DAYS" default:"730"`
+	RetentionKeepRequestDays      int    `envconfig:"RETENTION_KEEP_REQUEST_DAYS" default:"365"`
 }
 
 func Load() (Config, error) {

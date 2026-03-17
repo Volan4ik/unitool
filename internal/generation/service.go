@@ -89,7 +89,7 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 	}
 
 	// Finalize generation request metrics/cost.
-	var cText, cImg, cVid, cSearch pgtype.Int4
+	var cText, cImg, cVid pgtype.Int4
 	switch job.Kind {
 	case "image":
 		cImg = pgtype.Int4{Int32: 1, Valid: true}
@@ -99,13 +99,12 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 		cText = pgtype.Int4{Int32: 1, Valid: true}
 	}
 	_ = s.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
-		ID:                job.GenerationRequestID,
-		OutputTokens:      pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
-		LatencyMs:         pgtype.Int4{Int32: latency, Valid: true},
-		CostCreditsText:   cText,
-		CostCreditsImage:  cImg,
-		CostCreditsVideo:  cVid,
-		CostCreditsSearch: cSearch,
+		ID:               job.GenerationRequestID,
+		OutputTokens:     pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
+		LatencyMs:        pgtype.Int4{Int32: latency, Valid: true},
+		CostCreditsText:  cText,
+		CostCreditsImage: cImg,
+		CostCreditsVideo: cVid,
 	})
 	_, _ = s.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
 		UserID:              job.UserID,
@@ -152,7 +151,7 @@ func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob,
 	})
 	_ = s.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
 		ID:           job.GenerationRequestID,
-		Status:       "failed",
+		Column2:      "failed",
 		ErrorMessage: pgtype.Text{String: errText, Valid: true},
 		LatencyMs:    pgtype.Int4{Int32: latency, Valid: true},
 	})

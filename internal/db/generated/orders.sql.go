@@ -183,7 +183,10 @@ func (q *Queries) ListUserOrders(ctx context.Context, arg ListUserOrdersParams) 
 }
 
 const markOrderFailed = `-- name: MarkOrderFailed :exec
-UPDATE orders SET status='failed' WHERE id=$1
+UPDATE orders
+SET status='failed'
+WHERE id=$1
+  AND status IN ('created','precheckout_ok')
 `
 
 func (q *Queries) MarkOrderFailed(ctx context.Context, id pgtype.UUID) error {
@@ -191,13 +194,15 @@ func (q *Queries) MarkOrderFailed(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
-const markOrderPaid = `-- name: MarkOrderPaid :exec
+const markOrderPaid = `-- name: MarkOrderPaid :one
 UPDATE orders
 SET status='paid', paid_at=now(),
     tg_payment_charge_id=$2,
     provider_payment_charge_id=$3,
     buyer_email = COALESCE($4, buyer_email)
 WHERE id=$1
+  AND status IN ('created','precheckout_ok')
+RETURNING id
 `
 
 type MarkOrderPaidParams struct {
@@ -207,18 +212,23 @@ type MarkOrderPaidParams struct {
 	BuyerEmail              pgtype.Text `json:"buyer_email"`
 }
 
-func (q *Queries) MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) error {
-	_, err := q.db.Exec(ctx, markOrderPaid,
+func (q *Queries) MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, markOrderPaid,
 		arg.ID,
 		arg.TgPaymentChargeID,
 		arg.ProviderPaymentChargeID,
 		arg.BuyerEmail,
 	)
-	return err
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const markOrderPrecheckout = `-- name: MarkOrderPrecheckout :exec
-UPDATE orders SET status='precheckout_ok' WHERE id=$1
+UPDATE orders
+SET status='precheckout_ok'
+WHERE id=$1
+  AND status='created'
 `
 
 func (q *Queries) MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) error {
@@ -227,7 +237,10 @@ func (q *Queries) MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) erro
 }
 
 const markOrderRefunded = `-- name: MarkOrderRefunded :exec
-UPDATE orders SET status='refunded' WHERE id=$1
+UPDATE orders
+SET status='refunded'
+WHERE id=$1
+  AND status='paid'
 `
 
 func (q *Queries) MarkOrderRefunded(ctx context.Context, id pgtype.UUID) error {

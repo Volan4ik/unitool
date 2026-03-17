@@ -1,6 +1,9 @@
 package workers
 
-import "context"
+import (
+	"context"
+	"log"
+)
 
 type Job func(ctx context.Context) error
 
@@ -9,14 +12,29 @@ type Pool struct {
 }
 
 func NewPool(buffer int, workers int) *Pool {
+	if workers <= 0 {
+		workers = 1
+	}
+	if buffer <= 0 {
+		buffer = workers * 2
+	}
 	p := &Pool{jobs: make(chan Job, buffer)}
-	for i := 0; i < workers; i++ { go p.worker() }
+	for i := 0; i < workers; i++ {
+		go p.worker()
+	}
 	return p
 }
 
 func (p *Pool) worker() {
 	for job := range p.jobs {
-		_ = job(context.Background())
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("workers: recovered panic: %v", r)
+				}
+			}()
+			_ = job(context.Background())
+		}()
 	}
 }
 

@@ -195,7 +195,7 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 		Column2:      kind,
 		Provider:     providerName,
 		Model:        modelID,
-		Status:       "running",
+		Column8:      "running",
 		RequestIDExt: pgtype.Text{},
 		PromptHash:   pgtype.Text{},
 		InputTokens:  pgtype.Int4{},
@@ -220,7 +220,7 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 	}); err != nil {
 		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
 			ID:           gr.ID,
-			Status:       "failed",
+			Column2:      "failed",
 			ErrorMessage: pgtype.Text{String: "insert user message failed", Valid: true},
 			LatencyMs:    pgtype.Int4{},
 		})
@@ -232,7 +232,7 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 	if err := r.chargeOneCredit(ctx, userID, kind, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, kind)); err != nil {
 		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
 			ID:           gr.ID,
-			Status:       "failed_balance",
+			Column2:      "failed_balance",
 			ErrorMessage: pgtype.Text{String: err.Error(), Valid: true},
 			LatencyMs:    pgtype.Int4{},
 		})
@@ -315,7 +315,7 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 	if err != nil {
 		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
 			ID:           gr.ID,
-			Status:       "failed",
+			Column2:      "failed",
 			ErrorMessage: pgtype.Text{String: err.Error(), Valid: true},
 			LatencyMs:    pgtype.Int4{Int32: int32(latency), Valid: true},
 		})
@@ -330,7 +330,7 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 		return
 	}
 
-	var cText, cImg, cVid, cSearch pgtype.Int4
+	var cText, cImg, cVid pgtype.Int4
 	switch kind {
 	case "text":
 		cText = pgtype.Int4{Int32: 1, Valid: true}
@@ -340,13 +340,12 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 		cVid = pgtype.Int4{Int32: 1, Valid: true}
 	}
 	_ = r.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
-		ID:                gr.ID,
-		OutputTokens:      pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
-		LatencyMs:         pgtype.Int4{Int32: int32(latency), Valid: true},
-		CostCreditsText:   cText,
-		CostCreditsImage:  cImg,
-		CostCreditsVideo:  cVid,
-		CostCreditsSearch: cSearch,
+		ID:               gr.ID,
+		OutputTokens:     pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
+		LatencyMs:        pgtype.Int4{Int32: int32(latency), Valid: true},
+		CostCreditsText:  cText,
+		CostCreditsImage: cImg,
+		CostCreditsVideo: cVid,
 	})
 	if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
 		UserID:              userID,
@@ -400,7 +399,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 		Column2:      kind,
 		Provider:     providerName,
 		Model:        modelID,
-		Status:       "queued",
+		Column8:      "queued",
 		RequestIDExt: pgtype.Text{},
 		PromptHash:   pgtype.Text{},
 		InputTokens:  pgtype.Int4{},
@@ -425,7 +424,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 	}); err != nil {
 		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
 			ID:           gr.ID,
-			Status:       "failed",
+			Column2:      "failed",
 			ErrorMessage: pgtype.Text{String: "insert user message failed", Valid: true},
 			LatencyMs:    pgtype.Int4{},
 		})
@@ -437,7 +436,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 	if err := r.chargeOneCredit(ctx, userID, kind, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, kind)); err != nil {
 		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
 			ID:           gr.ID,
-			Status:       "failed_balance",
+			Column2:      "failed_balance",
 			ErrorMessage: pgtype.Text{String: err.Error(), Valid: true},
 			LatencyMs:    pgtype.Int4{},
 		})
@@ -459,7 +458,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 	if err != nil {
 		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
 			ID:           gr.ID,
-			Status:       "failed_queue",
+			Column2:      "failed_queue",
 			ErrorMessage: pgtype.Text{String: err.Error(), Valid: true},
 			LatencyMs:    pgtype.Int4{},
 		})

@@ -4,34 +4,43 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	db "unitool/internal/db/generated"
 )
 
 type Package struct {
-	ID            int64
-	Title         string
-	PriceRub      int
-	TextCredits   int
-	ImageCredits  int
-	VideoCredits  int
-	SearchCredits int
+	ID           int64
+	Title        string
+	PriceRub     int
+	TextCredits  int
+	ImageCredits int
+	VideoCredits int
 }
 
 type Service struct {
 	Bot           *tgbotapi.BotAPI
 	ProviderToken string
+	Pool          *pgxpool.Pool
 	Q             *db.Queries
 	DBCtx         context.Context
 }
 
-func NewService(bot *tgbotapi.BotAPI, providerToken string, q *db.Queries) *Service {
-	return &Service{Bot: bot, ProviderToken: providerToken, Q: q, DBCtx: context.Background()}
+func NewService(bot *tgbotapi.BotAPI, providerToken string, pool *pgxpool.Pool, q *db.Queries) *Service {
+	return &Service{
+		Bot:           bot,
+		ProviderToken: providerToken,
+		Pool:          pool,
+		Q:             q,
+		DBCtx:         context.Background(),
+	}
 }
 
 func (s *Service) SendInvoiceForPackage(chatID int64, userID int64, pkg Package, buyerEmail string) (string, error) {
@@ -122,17 +131,30 @@ func (s *Service) HandleSuccessfulPayment(msg *tgbotapi.Message) {
 		log.Printf("payment mismatch: currency=%s amount=%d expected=%d", sp.Currency, amountRub, order.AmountRub)
 		return
 	}
+	tx, err := s.Pool.Begin(s.DBCtx)
+	if err != nil {
+		log.Printf("begin payment tx failed: %v", err)
+		return
+	}
+	defer func() { _ = tx.Rollback(s.DBCtx) }()
 
-	// Mark as paid
-	_ = s.Q.MarkOrderPaid(s.DBCtx, db.MarkOrderPaidParams{
+	qtx := s.Q.WithTx(tx)
+	if _, err := qtx.MarkOrderPaid(s.DBCtx, db.MarkOrderPaidParams{
 		ID:                      pgtype.UUID{Bytes: orderUUID, Valid: true},
 		TgPaymentChargeID:       pgtype.Text{String: sp.TelegramPaymentChargeID, Valid: sp.TelegramPaymentChargeID != ""},
 		ProviderPaymentChargeID: pgtype.Text{String: sp.ProviderPaymentChargeID, Valid: sp.ProviderPaymentChargeID != ""},
 		BuyerEmail:              pgtype.Text{},
-	})
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Illegal transition or already processed by another worker.
+			return
+		}
+		log.Printf("mark order paid failed: %v", err)
+		return
+	}
 
-	// Load package and grant credits via ledger
-	pkg, err := s.Q.GetPackageByID(s.DBCtx, order.PackageID)
+	// Grant credits atomically in the same transaction as payment status update.
+	pkg, err := qtx.GetPackageByID(s.DBCtx, order.PackageID)
 	if err != nil {
 		log.Printf("get package: %v", err)
 		return
@@ -145,17 +167,20 @@ func (s *Service) HandleSuccessfulPayment(msg *tgbotapi.Message) {
 	}
 	metaBytes, _ := json.Marshal(meta)
 	opKey := fmt.Sprintf("purchase:%s", orderUUID.String())
-	if err := s.Q.AddPurchaseCredits(s.DBCtx, db.AddPurchaseCreditsParams{
-		UserID:      order.UserID,
-		OrderID:     pgtype.UUID{Bytes: orderUUID, Valid: true},
-		DeltaText:   pkg.TextCredits,
-		DeltaImage:  pkg.ImageCredits,
-		DeltaVideo:  pkg.VideoCredits,
-		DeltaSearch: pkg.SearchCredits,
-		Meta:        metaBytes,
-		OpKey:       pgtype.Text{String: opKey, Valid: true},
+	if err := qtx.AddPurchaseCredits(s.DBCtx, db.AddPurchaseCreditsParams{
+		UserID:     order.UserID,
+		OrderID:    pgtype.UUID{Bytes: orderUUID, Valid: true},
+		DeltaText:  pkg.TextCredits,
+		DeltaImage: pkg.ImageCredits,
+		DeltaVideo: pkg.VideoCredits,
+		Meta:       metaBytes,
+		OpKey:      pgtype.Text{String: opKey, Valid: true},
 	}); err != nil {
 		log.Printf("grant credits: %v", err)
+		return
+	}
+	if err := tx.Commit(s.DBCtx); err != nil {
+		log.Printf("commit payment tx failed: %v", err)
 		return
 	}
 

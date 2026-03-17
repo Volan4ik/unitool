@@ -10,20 +10,19 @@ import (
 )
 
 const createPackage = `-- name: CreatePackage :one
-INSERT INTO packages (code, title, price_rub, text_credits, image_credits, video_credits, search_credits, is_active)
-VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8,TRUE))
-RETURNING id, code, title, price_rub, text_credits, image_credits, video_credits, search_credits, is_active, created_at, updated_at
+INSERT INTO packages (code, title, price_rub, text_credits, image_credits, video_credits, is_active)
+VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,TRUE))
+RETURNING id, code, title, price_rub, text_credits, image_credits, video_credits, is_active, created_at, updated_at
 `
 
 type CreatePackageParams struct {
-	Code          string      `json:"code"`
-	Title         string      `json:"title"`
-	PriceRub      int32       `json:"price_rub"`
-	TextCredits   int32       `json:"text_credits"`
-	ImageCredits  int32       `json:"image_credits"`
-	VideoCredits  int32       `json:"video_credits"`
-	SearchCredits int32       `json:"search_credits"`
-	Column8       interface{} `json:"column_8"`
+	Code         string      `json:"code"`
+	Title        string      `json:"title"`
+	PriceRub     int32       `json:"price_rub"`
+	TextCredits  int32       `json:"text_credits"`
+	ImageCredits int32       `json:"image_credits"`
+	VideoCredits int32       `json:"video_credits"`
+	Column7      interface{} `json:"column_7"`
 }
 
 func (q *Queries) CreatePackage(ctx context.Context, arg CreatePackageParams) (Package, error) {
@@ -34,8 +33,7 @@ func (q *Queries) CreatePackage(ctx context.Context, arg CreatePackageParams) (P
 		arg.TextCredits,
 		arg.ImageCredits,
 		arg.VideoCredits,
-		arg.SearchCredits,
-		arg.Column8,
+		arg.Column7,
 	)
 	var i Package
 	err := row.Scan(
@@ -46,7 +44,6 @@ func (q *Queries) CreatePackage(ctx context.Context, arg CreatePackageParams) (P
 		&i.TextCredits,
 		&i.ImageCredits,
 		&i.VideoCredits,
-		&i.SearchCredits,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -64,7 +61,7 @@ func (q *Queries) DeactivatePackage(ctx context.Context, id int64) error {
 }
 
 const getPackageByCode = `-- name: GetPackageByCode :one
-SELECT id, code, title, price_rub, text_credits, image_credits, video_credits, search_credits, is_active, created_at, updated_at FROM packages WHERE code = $1
+SELECT id, code, title, price_rub, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE code = $1
 `
 
 func (q *Queries) GetPackageByCode(ctx context.Context, code string) (Package, error) {
@@ -78,7 +75,6 @@ func (q *Queries) GetPackageByCode(ctx context.Context, code string) (Package, e
 		&i.TextCredits,
 		&i.ImageCredits,
 		&i.VideoCredits,
-		&i.SearchCredits,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -87,7 +83,7 @@ func (q *Queries) GetPackageByCode(ctx context.Context, code string) (Package, e
 }
 
 const getPackageByID = `-- name: GetPackageByID :one
-SELECT id, code, title, price_rub, text_credits, image_credits, video_credits, search_credits, is_active, created_at, updated_at FROM packages WHERE id = $1
+SELECT id, code, title, price_rub, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE id = $1
 `
 
 func (q *Queries) GetPackageByID(ctx context.Context, id int64) (Package, error) {
@@ -101,7 +97,6 @@ func (q *Queries) GetPackageByID(ctx context.Context, id int64) (Package, error)
 		&i.TextCredits,
 		&i.ImageCredits,
 		&i.VideoCredits,
-		&i.SearchCredits,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -110,7 +105,7 @@ func (q *Queries) GetPackageByID(ctx context.Context, id int64) (Package, error)
 }
 
 const listActivePackages = `-- name: ListActivePackages :many
-SELECT id, code, title, price_rub, text_credits, image_credits, video_credits, search_credits, is_active, created_at, updated_at FROM packages WHERE is_active = TRUE ORDER BY price_rub ASC
+SELECT id, code, title, price_rub, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE is_active = TRUE ORDER BY price_rub ASC
 `
 
 func (q *Queries) ListActivePackages(ctx context.Context) ([]Package, error) {
@@ -130,7 +125,6 @@ func (q *Queries) ListActivePackages(ctx context.Context) ([]Package, error) {
 			&i.TextCredits,
 			&i.ImageCredits,
 			&i.VideoCredits,
-			&i.SearchCredits,
 			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -152,22 +146,20 @@ SET title = COALESCE($2, title),
     text_credits = COALESCE($4, text_credits),
     image_credits = COALESCE($5, image_credits),
     video_credits = COALESCE($6, video_credits),
-    search_credits = COALESCE($7, search_credits),
-    is_active = COALESCE($8, is_active),
+    is_active = COALESCE($7, is_active),
     updated_at = now()
 WHERE id = $1
-RETURNING id, code, title, price_rub, text_credits, image_credits, video_credits, search_credits, is_active, created_at, updated_at
+RETURNING id, code, title, price_rub, text_credits, image_credits, video_credits, is_active, created_at, updated_at
 `
 
 type UpdatePackageParams struct {
-	ID            int64  `json:"id"`
-	Title         string `json:"title"`
-	PriceRub      int32  `json:"price_rub"`
-	TextCredits   int32  `json:"text_credits"`
-	ImageCredits  int32  `json:"image_credits"`
-	VideoCredits  int32  `json:"video_credits"`
-	SearchCredits int32  `json:"search_credits"`
-	IsActive      bool   `json:"is_active"`
+	ID           int64  `json:"id"`
+	Title        string `json:"title"`
+	PriceRub     int32  `json:"price_rub"`
+	TextCredits  int32  `json:"text_credits"`
+	ImageCredits int32  `json:"image_credits"`
+	VideoCredits int32  `json:"video_credits"`
+	IsActive     bool   `json:"is_active"`
 }
 
 func (q *Queries) UpdatePackage(ctx context.Context, arg UpdatePackageParams) (Package, error) {
@@ -178,7 +170,6 @@ func (q *Queries) UpdatePackage(ctx context.Context, arg UpdatePackageParams) (P
 		arg.TextCredits,
 		arg.ImageCredits,
 		arg.VideoCredits,
-		arg.SearchCredits,
 		arg.IsActive,
 	)
 	var i Package
@@ -190,7 +181,6 @@ func (q *Queries) UpdatePackage(ctx context.Context, arg UpdatePackageParams) (P
 		&i.TextCredits,
 		&i.ImageCredits,
 		&i.VideoCredits,
-		&i.SearchCredits,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,

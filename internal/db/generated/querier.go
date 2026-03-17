@@ -47,17 +47,15 @@ type Querier interface {
 	MarkGenerationJobDone(ctx context.Context, arg MarkGenerationJobDoneParams) error
 	MarkGenerationJobFailed(ctx context.Context, arg MarkGenerationJobFailedParams) error
 	MarkOrderFailed(ctx context.Context, id pgtype.UUID) error
-	MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) error
+	MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (pgtype.UUID, error)
 	MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) error
 	MarkOrderRefunded(ctx context.Context, id pgtype.UUID) error
 	RefundImage(ctx context.Context, arg RefundImageParams) error
-	RefundSearch(ctx context.Context, arg RefundSearchParams) error
 	RefundText(ctx context.Context, arg RefundTextParams) error
 	RefundVideo(ctx context.Context, arg RefundVideoParams) error
 	RequeueGenerationJob(ctx context.Context, arg RequeueGenerationJobParams) error
 	SetMediaAgreed(ctx context.Context, id int64) error
 	SpendImage(ctx context.Context, arg SpendImageParams) error
-	SpendSearch(ctx context.Context, arg SpendSearchParams) error
 	SpendText(ctx context.Context, arg SpendTextParams) error
 	SpendVideo(ctx context.Context, arg SpendVideoParams) error
 	SumBalancesFromLedger(ctx context.Context, userID int64) (SumBalancesFromLedgerRow, error)

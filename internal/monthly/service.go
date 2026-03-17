@@ -69,17 +69,16 @@ func (s *Service) applyMonthlyFree(ctx context.Context) error {
 	}
 
 	var free struct {
-		TextPerMonth   int `json:"text_per_month"`
-		SearchPerMonth int `json:"search_per_month"`
-		ImagePerMonth  int `json:"image_per_month"`
-		VideoPerMonth  int `json:"video_per_month"`
+		TextPerMonth  int `json:"text_per_month"`
+		ImagePerMonth int `json:"image_per_month"`
+		VideoPerMonth int `json:"video_per_month"`
 	}
 	if err := json.Unmarshal(raw, &free); err != nil {
 		return err
 	}
 
 	// If all zero — nothing to do
-	if free.TextPerMonth == 0 && free.ImagePerMonth == 0 && free.VideoPerMonth == 0 && free.SearchPerMonth == 0 {
+	if free.TextPerMonth == 0 && free.ImagePerMonth == 0 && free.VideoPerMonth == 0 {
 		return nil
 	}
 
@@ -91,15 +90,14 @@ func (s *Service) applyMonthlyFree(ctx context.Context) error {
 
 	// Idempotent monthly grant keyed by op_key(month + user_id)
 	const sql = `
-INSERT INTO credit_ledger (user_id, delta_text, delta_image, delta_video, delta_search, reason, meta, op_key)
+INSERT INTO credit_ledger (user_id, delta_text, delta_image, delta_video, reason, meta, op_key)
 SELECT
   u.id,
   $1::int,
   $2::int,
   $3::int,
-  $4::int,
   'monthly_free',
-  $5::jsonb,
+  $4::jsonb,
   ('monthly_free:' || to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM') || ':' || u.id::text)
 FROM users u
 ON CONFLICT (op_key) DO NOTHING;
@@ -108,7 +106,6 @@ ON CONFLICT (op_key) DO NOTHING;
 		int32(free.TextPerMonth),
 		int32(free.ImagePerMonth),
 		int32(free.VideoPerMonth),
-		int32(free.SearchPerMonth),
 		string(metaBytes),
 	)
 	return err

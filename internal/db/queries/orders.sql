@@ -7,21 +7,32 @@ RETURNING id, user_id, package_id, amount_rub, currency,
           buyer_email, provider_data, created_at, paid_at;
 
 -- name: MarkOrderPrecheckout :exec
-UPDATE orders SET status='precheckout_ok' WHERE id=$1;
+UPDATE orders
+SET status='precheckout_ok'
+WHERE id=$1
+  AND status='created';
 
--- name: MarkOrderPaid :exec
+-- name: MarkOrderPaid :one
 UPDATE orders
 SET status='paid', paid_at=now(),
     tg_payment_charge_id=$2,
     provider_payment_charge_id=$3,
     buyer_email = COALESCE($4, buyer_email)
-WHERE id=$1;
+WHERE id=$1
+  AND status IN ('created','precheckout_ok')
+RETURNING id;
 
 -- name: MarkOrderFailed :exec
-UPDATE orders SET status='failed' WHERE id=$1;
+UPDATE orders
+SET status='failed'
+WHERE id=$1
+  AND status IN ('created','precheckout_ok');
 
 -- name: MarkOrderRefunded :exec
-UPDATE orders SET status='refunded' WHERE id=$1;
+UPDATE orders
+SET status='refunded'
+WHERE id=$1
+  AND status='paid';
 
 -- name: GetOrderByID :one
 SELECT id, user_id, package_id, amount_rub, currency,

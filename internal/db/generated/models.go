@@ -43,18 +43,17 @@ type ChatMessage struct {
 }
 
 type CreditLedger struct {
-	ID          int64              `json:"id"`
-	UserID      int64              `json:"user_id"`
-	OrderID     pgtype.UUID        `json:"order_id"`
-	GenKind     interface{}        `json:"gen_kind"`
-	DeltaText   int32              `json:"delta_text"`
-	DeltaImage  int32              `json:"delta_image"`
-	DeltaVideo  int32              `json:"delta_video"`
-	DeltaSearch int32              `json:"delta_search"`
-	Reason      interface{}        `json:"reason"`
-	Meta        []byte             `json:"meta"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	OpKey       pgtype.Text        `json:"op_key"`
+	ID         int64              `json:"id"`
+	UserID     int64              `json:"user_id"`
+	OrderID    pgtype.UUID        `json:"order_id"`
+	GenKind    interface{}        `json:"gen_kind"`
+	DeltaText  int32              `json:"delta_text"`
+	DeltaImage int32              `json:"delta_image"`
+	DeltaVideo int32              `json:"delta_video"`
+	Reason     interface{}        `json:"reason"`
+	Meta       []byte             `json:"meta"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	OpKey      pgtype.Text        `json:"op_key"`
 }
 
 type GenerationJob struct {
@@ -79,24 +78,23 @@ type GenerationJob struct {
 }
 
 type GenerationRequest struct {
-	ID                int64              `json:"id"`
-	UserID            int64              `json:"user_id"`
-	Kind              interface{}        `json:"kind"`
-	Provider          string             `json:"provider"`
-	Model             string             `json:"model"`
-	RequestIDExt      pgtype.Text        `json:"request_id_ext"`
-	PromptHash        pgtype.Text        `json:"prompt_hash"`
-	InputTokens       pgtype.Int4        `json:"input_tokens"`
-	OutputTokens      pgtype.Int4        `json:"output_tokens"`
-	CostCreditsText   pgtype.Int4        `json:"cost_credits_text"`
-	CostCreditsImage  pgtype.Int4        `json:"cost_credits_image"`
-	CostCreditsVideo  pgtype.Int4        `json:"cost_credits_video"`
-	CostCreditsSearch pgtype.Int4        `json:"cost_credits_search"`
-	Status            interface{}        `json:"status"`
-	ErrorMessage      pgtype.Text        `json:"error_message"`
-	LatencyMs         pgtype.Int4        `json:"latency_ms"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
+	ID               int64              `json:"id"`
+	UserID           int64              `json:"user_id"`
+	Kind             interface{}        `json:"kind"`
+	Provider         string             `json:"provider"`
+	Model            string             `json:"model"`
+	RequestIDExt     pgtype.Text        `json:"request_id_ext"`
+	PromptHash       pgtype.Text        `json:"prompt_hash"`
+	InputTokens      pgtype.Int4        `json:"input_tokens"`
+	OutputTokens     pgtype.Int4        `json:"output_tokens"`
+	CostCreditsText  pgtype.Int4        `json:"cost_credits_text"`
+	CostCreditsImage pgtype.Int4        `json:"cost_credits_image"`
+	CostCreditsVideo pgtype.Int4        `json:"cost_credits_video"`
+	Status           interface{}        `json:"status"`
+	ErrorMessage     pgtype.Text        `json:"error_message"`
+	LatencyMs        pgtype.Int4        `json:"latency_ms"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
 }
 
 type Order struct {
@@ -116,17 +114,16 @@ type Order struct {
 }
 
 type Package struct {
-	ID            int64              `json:"id"`
-	Code          string             `json:"code"`
-	Title         string             `json:"title"`
-	PriceRub      int32              `json:"price_rub"`
-	TextCredits   int32              `json:"text_credits"`
-	ImageCredits  int32              `json:"image_credits"`
-	VideoCredits  int32              `json:"video_credits"`
-	SearchCredits int32              `json:"search_credits"`
-	IsActive      bool               `json:"is_active"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID           int64              `json:"id"`
+	Code         string             `json:"code"`
+	Title        string             `json:"title"`
+	PriceRub     int32              `json:"price_rub"`
+	TextCredits  int32              `json:"text_credits"`
+	ImageCredits int32              `json:"image_credits"`
+	VideoCredits int32              `json:"video_credits"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Setting struct {
@@ -136,21 +133,20 @@ type Setting struct {
 }
 
 type User struct {
-	ID            int64              `json:"id"`
-	TgID          int64              `json:"tg_id"`
-	Username      pgtype.Text        `json:"username"`
-	FirstName     pgtype.Text        `json:"first_name"`
-	LastName      pgtype.Text        `json:"last_name"`
-	LangCode      pgtype.Text        `json:"lang_code"`
-	Email         pgtype.Text        `json:"email"`
-	IsAdmin       bool               `json:"is_admin"`
-	MediaAgreed   bool               `json:"media_agreed"`
-	TextBalance   int32              `json:"text_balance"`
-	ImageBalance  int32              `json:"image_balance"`
-	VideoBalance  int32              `json:"video_balance"`
-	SearchBalance int32              `json:"search_balance"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID           int64              `json:"id"`
+	TgID         int64              `json:"tg_id"`
+	Username     pgtype.Text        `json:"username"`
+	FirstName    pgtype.Text        `json:"first_name"`
+	LastName     pgtype.Text        `json:"last_name"`
+	LangCode     pgtype.Text        `json:"lang_code"`
+	Email        pgtype.Text        `json:"email"`
+	IsAdmin      bool               `json:"is_admin"`
+	MediaAgreed  bool               `json:"media_agreed"`
+	TextBalance  int32              `json:"text_balance"`
+	ImageBalance int32              `json:"image_balance"`
+	VideoBalance int32              `json:"video_balance"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type UserConversation struct {
@@ -182,13 +178,12 @@ type VOrderBrief struct {
 }
 
 type VUserBalance struct {
-	ID            int64              `json:"id"`
-	TgID          int64              `json:"tg_id"`
-	Username      pgtype.Text        `json:"username"`
-	TextBalance   int32              `json:"text_balance"`
-	ImageBalance  int32              `json:"image_balance"`
-	VideoBalance  int32              `json:"video_balance"`
-	SearchBalance int32              `json:"search_balance"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID           int64              `json:"id"`
+	TgID         int64              `json:"tg_id"`
+	Username     pgtype.Text        `json:"username"`
+	TextBalance  int32              `json:"text_balance"`
+	ImageBalance int32              `json:"image_balance"`
+	VideoBalance int32              `json:"video_balance"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }

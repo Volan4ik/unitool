@@ -99,7 +99,7 @@ func (q *Queries) DailyUsageByKind(ctx context.Context, arg DailyUsageByKindPara
 
 const failGenerationRequest = `-- name: FailGenerationRequest :exec
 UPDATE generation_requests
-SET status = $2,
+SET status = $2::gen_request_status,
     error_message = $3,
     latency_ms = $4,
     finished_at = now()
@@ -108,7 +108,7 @@ WHERE id = $1
 
 type FailGenerationRequestParams struct {
 	ID           int64       `json:"id"`
-	Status       interface{} `json:"status"`
+	Column2      interface{} `json:"column_2"`
 	ErrorMessage pgtype.Text `json:"error_message"`
 	LatencyMs    pgtype.Int4 `json:"latency_ms"`
 }
@@ -116,7 +116,7 @@ type FailGenerationRequestParams struct {
 func (q *Queries) FailGenerationRequest(ctx context.Context, arg FailGenerationRequestParams) error {
 	_, err := q.db.Exec(ctx, failGenerationRequest,
 		arg.ID,
-		arg.Status,
+		arg.Column2,
 		arg.ErrorMessage,
 		arg.LatencyMs,
 	)
@@ -131,19 +131,17 @@ SET output_tokens = $2,
     finished_at = now(),
     cost_credits_text = COALESCE($4, cost_credits_text),
     cost_credits_image = COALESCE($5, cost_credits_image),
-    cost_credits_video = COALESCE($6, cost_credits_video),
-    cost_credits_search = COALESCE($7, cost_credits_search)
+    cost_credits_video = COALESCE($6, cost_credits_video)
 WHERE id = $1
 `
 
 type FinishGenerationRequestParams struct {
-	ID                int64       `json:"id"`
-	OutputTokens      pgtype.Int4 `json:"output_tokens"`
-	LatencyMs         pgtype.Int4 `json:"latency_ms"`
-	CostCreditsText   pgtype.Int4 `json:"cost_credits_text"`
-	CostCreditsImage  pgtype.Int4 `json:"cost_credits_image"`
-	CostCreditsVideo  pgtype.Int4 `json:"cost_credits_video"`
-	CostCreditsSearch pgtype.Int4 `json:"cost_credits_search"`
+	ID               int64       `json:"id"`
+	OutputTokens     pgtype.Int4 `json:"output_tokens"`
+	LatencyMs        pgtype.Int4 `json:"latency_ms"`
+	CostCreditsText  pgtype.Int4 `json:"cost_credits_text"`
+	CostCreditsImage pgtype.Int4 `json:"cost_credits_image"`
+	CostCreditsVideo pgtype.Int4 `json:"cost_credits_video"`
 }
 
 func (q *Queries) FinishGenerationRequest(ctx context.Context, arg FinishGenerationRequestParams) error {
@@ -154,7 +152,6 @@ func (q *Queries) FinishGenerationRequest(ctx context.Context, arg FinishGenerat
 		arg.CostCreditsText,
 		arg.CostCreditsImage,
 		arg.CostCreditsVideo,
-		arg.CostCreditsSearch,
 	)
 	return err
 }
@@ -164,8 +161,8 @@ INSERT INTO generation_requests (
   user_id, kind, provider, model, request_id_ext, prompt_hash,
   input_tokens, status, created_at
 ) VALUES (
-  $1,$2::gen_type,$3,$4,$5,$6,$7,$8, now()
-) RETURNING id, user_id, kind, provider, model, request_id_ext, prompt_hash, input_tokens, output_tokens, cost_credits_text, cost_credits_image, cost_credits_video, cost_credits_search, status, error_message, latency_ms, created_at, finished_at
+  $1,$2::gen_type,$3,$4,$5,$6,$7,$8::gen_request_status, now()
+) RETURNING id, user_id, kind, provider, model, request_id_ext, prompt_hash, input_tokens, output_tokens, cost_credits_text, cost_credits_image, cost_credits_video, status, error_message, latency_ms, created_at, finished_at
 `
 
 type InsertGenerationRequestParams struct {
@@ -176,7 +173,7 @@ type InsertGenerationRequestParams struct {
 	RequestIDExt pgtype.Text `json:"request_id_ext"`
 	PromptHash   pgtype.Text `json:"prompt_hash"`
 	InputTokens  pgtype.Int4 `json:"input_tokens"`
-	Status       interface{} `json:"status"`
+	Column8      interface{} `json:"column_8"`
 }
 
 func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerationRequestParams) (GenerationRequest, error) {
@@ -188,7 +185,7 @@ func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerat
 		arg.RequestIDExt,
 		arg.PromptHash,
 		arg.InputTokens,
-		arg.Status,
+		arg.Column8,
 	)
 	var i GenerationRequest
 	err := row.Scan(
@@ -204,7 +201,6 @@ func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerat
 		&i.CostCreditsText,
 		&i.CostCreditsImage,
 		&i.CostCreditsVideo,
-		&i.CostCreditsSearch,
 		&i.Status,
 		&i.ErrorMessage,
 		&i.LatencyMs,

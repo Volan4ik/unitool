@@ -13,17 +13,16 @@ import (
 
 const addAdminGrant = `-- name: AddAdminGrant :exec
 INSERT INTO credit_ledger (user_id,
-  delta_text, delta_image, delta_video, delta_search, reason, meta)
-VALUES ($1,$2,$3,$4,$5,'admin_grant',$6)
+  delta_text, delta_image, delta_video, reason, meta)
+VALUES ($1,$2,$3,$4,'admin_grant',$5)
 `
 
 type AddAdminGrantParams struct {
-	UserID      int64  `json:"user_id"`
-	DeltaText   int32  `json:"delta_text"`
-	DeltaImage  int32  `json:"delta_image"`
-	DeltaVideo  int32  `json:"delta_video"`
-	DeltaSearch int32  `json:"delta_search"`
-	Meta        []byte `json:"meta"`
+	UserID     int64  `json:"user_id"`
+	DeltaText  int32  `json:"delta_text"`
+	DeltaImage int32  `json:"delta_image"`
+	DeltaVideo int32  `json:"delta_video"`
+	Meta       []byte `json:"meta"`
 }
 
 func (q *Queries) AddAdminGrant(ctx context.Context, arg AddAdminGrantParams) error {
@@ -32,7 +31,6 @@ func (q *Queries) AddAdminGrant(ctx context.Context, arg AddAdminGrantParams) er
 		arg.DeltaText,
 		arg.DeltaImage,
 		arg.DeltaVideo,
-		arg.DeltaSearch,
 		arg.Meta,
 	)
 	return err
@@ -40,20 +38,19 @@ func (q *Queries) AddAdminGrant(ctx context.Context, arg AddAdminGrantParams) er
 
 const addPurchaseCredits = `-- name: AddPurchaseCredits :exec
 INSERT INTO credit_ledger (user_id, order_id,
-  delta_text, delta_image, delta_video, delta_search, reason, meta, op_key)
-VALUES ($1,$2,$3,$4,$5,$6,'purchase',$7,$8)
+  delta_text, delta_image, delta_video, reason, meta, op_key)
+VALUES ($1,$2,$3,$4,$5,'purchase',$6,$7)
 ON CONFLICT (op_key) DO NOTHING
 `
 
 type AddPurchaseCreditsParams struct {
-	UserID      int64       `json:"user_id"`
-	OrderID     pgtype.UUID `json:"order_id"`
-	DeltaText   int32       `json:"delta_text"`
-	DeltaImage  int32       `json:"delta_image"`
-	DeltaVideo  int32       `json:"delta_video"`
-	DeltaSearch int32       `json:"delta_search"`
-	Meta        []byte      `json:"meta"`
-	OpKey       pgtype.Text `json:"op_key"`
+	UserID     int64       `json:"user_id"`
+	OrderID    pgtype.UUID `json:"order_id"`
+	DeltaText  int32       `json:"delta_text"`
+	DeltaImage int32       `json:"delta_image"`
+	DeltaVideo int32       `json:"delta_video"`
+	Meta       []byte      `json:"meta"`
+	OpKey      pgtype.Text `json:"op_key"`
 }
 
 func (q *Queries) AddPurchaseCredits(ctx context.Context, arg AddPurchaseCreditsParams) error {
@@ -63,7 +60,6 @@ func (q *Queries) AddPurchaseCredits(ctx context.Context, arg AddPurchaseCredits
 		arg.DeltaText,
 		arg.DeltaImage,
 		arg.DeltaVideo,
-		arg.DeltaSearch,
 		arg.Meta,
 		arg.OpKey,
 	)
@@ -72,20 +68,19 @@ func (q *Queries) AddPurchaseCredits(ctx context.Context, arg AddPurchaseCredits
 
 const addRefund = `-- name: AddRefund :exec
 INSERT INTO credit_ledger (user_id, order_id,
-  delta_text, delta_image, delta_video, delta_search, reason, meta, op_key)
-VALUES ($1,$2,$3,$4,$5,$6,'refund',$7,$8)
+  delta_text, delta_image, delta_video, reason, meta, op_key)
+VALUES ($1,$2,$3,$4,$5,'refund',$6,$7)
 ON CONFLICT (op_key) DO NOTHING
 `
 
 type AddRefundParams struct {
-	UserID      int64       `json:"user_id"`
-	OrderID     pgtype.UUID `json:"order_id"`
-	DeltaText   int32       `json:"delta_text"`
-	DeltaImage  int32       `json:"delta_image"`
-	DeltaVideo  int32       `json:"delta_video"`
-	DeltaSearch int32       `json:"delta_search"`
-	Meta        []byte      `json:"meta"`
-	OpKey       pgtype.Text `json:"op_key"`
+	UserID     int64       `json:"user_id"`
+	OrderID    pgtype.UUID `json:"order_id"`
+	DeltaText  int32       `json:"delta_text"`
+	DeltaImage int32       `json:"delta_image"`
+	DeltaVideo int32       `json:"delta_video"`
+	Meta       []byte      `json:"meta"`
+	OpKey      pgtype.Text `json:"op_key"`
 }
 
 func (q *Queries) AddRefund(ctx context.Context, arg AddRefundParams) error {
@@ -95,7 +90,6 @@ func (q *Queries) AddRefund(ctx context.Context, arg AddRefundParams) error {
 		arg.DeltaText,
 		arg.DeltaImage,
 		arg.DeltaVideo,
-		arg.DeltaSearch,
 		arg.Meta,
 		arg.OpKey,
 	)
@@ -103,7 +97,7 @@ func (q *Queries) AddRefund(ctx context.Context, arg AddRefundParams) error {
 }
 
 const getUserLedger = `-- name: GetUserLedger :many
-SELECT id, user_id, order_id, gen_kind, delta_text, delta_image, delta_video, delta_search, reason, meta, created_at, op_key FROM credit_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int
+SELECT id, user_id, order_id, gen_kind, delta_text, delta_image, delta_video, reason, meta, created_at, op_key FROM credit_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int
 `
 
 type GetUserLedgerParams struct {
@@ -129,7 +123,6 @@ func (q *Queries) GetUserLedger(ctx context.Context, arg GetUserLedgerParams) ([
 			&i.DeltaText,
 			&i.DeltaImage,
 			&i.DeltaVideo,
-			&i.DeltaSearch,
 			&i.Reason,
 			&i.Meta,
 			&i.CreatedAt,
@@ -159,23 +152,6 @@ type RefundImageParams struct {
 
 func (q *Queries) RefundImage(ctx context.Context, arg RefundImageParams) error {
 	_, err := q.db.Exec(ctx, refundImage, arg.UserID, arg.Meta, arg.OpKey)
-	return err
-}
-
-const refundSearch = `-- name: RefundSearch :exec
-INSERT INTO credit_ledger (user_id, gen_kind, delta_search, reason, meta, op_key)
-VALUES ($1,'search',1,'refund',$2,$3)
-ON CONFLICT (op_key) DO NOTHING
-`
-
-type RefundSearchParams struct {
-	UserID int64       `json:"user_id"`
-	Meta   []byte      `json:"meta"`
-	OpKey  pgtype.Text `json:"op_key"`
-}
-
-func (q *Queries) RefundSearch(ctx context.Context, arg RefundSearchParams) error {
-	_, err := q.db.Exec(ctx, refundSearch, arg.UserID, arg.Meta, arg.OpKey)
 	return err
 }
 
@@ -230,23 +206,6 @@ func (q *Queries) SpendImage(ctx context.Context, arg SpendImageParams) error {
 	return err
 }
 
-const spendSearch = `-- name: SpendSearch :exec
-INSERT INTO credit_ledger (user_id, gen_kind, delta_search, reason, meta, op_key)
-VALUES ($1,'search',-1,'spend',$2,$3)
-ON CONFLICT (op_key) DO NOTHING
-`
-
-type SpendSearchParams struct {
-	UserID int64       `json:"user_id"`
-	Meta   []byte      `json:"meta"`
-	OpKey  pgtype.Text `json:"op_key"`
-}
-
-func (q *Queries) SpendSearch(ctx context.Context, arg SpendSearchParams) error {
-	_, err := q.db.Exec(ctx, spendSearch, arg.UserID, arg.Meta, arg.OpKey)
-	return err
-}
-
 const spendText = `-- name: SpendText :exec
 INSERT INTO credit_ledger (user_id, gen_kind, delta_text, reason, meta, op_key)
 VALUES ($1,'text',-1,'spend',$2,$3)
@@ -285,27 +244,20 @@ const sumBalancesFromLedger = `-- name: SumBalancesFromLedger :one
 SELECT
   COALESCE(SUM(delta_text),0)   AS text_sum,
   COALESCE(SUM(delta_image),0)  AS image_sum,
-  COALESCE(SUM(delta_video),0)  AS video_sum,
-  COALESCE(SUM(delta_search),0) AS search_sum
+  COALESCE(SUM(delta_video),0)  AS video_sum
 FROM credit_ledger
 WHERE user_id = $1
 `
 
 type SumBalancesFromLedgerRow struct {
-	TextSum   interface{} `json:"text_sum"`
-	ImageSum  interface{} `json:"image_sum"`
-	VideoSum  interface{} `json:"video_sum"`
-	SearchSum interface{} `json:"search_sum"`
+	TextSum  interface{} `json:"text_sum"`
+	ImageSum interface{} `json:"image_sum"`
+	VideoSum interface{} `json:"video_sum"`
 }
 
 func (q *Queries) SumBalancesFromLedger(ctx context.Context, userID int64) (SumBalancesFromLedgerRow, error) {
 	row := q.db.QueryRow(ctx, sumBalancesFromLedger, userID)
 	var i SumBalancesFromLedgerRow
-	err := row.Scan(
-		&i.TextSum,
-		&i.ImageSum,
-		&i.VideoSum,
-		&i.SearchSum,
-	)
+	err := row.Scan(&i.TextSum, &i.ImageSum, &i.VideoSum)
 	return i, err
 }
