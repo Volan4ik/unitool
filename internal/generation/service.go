@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"net/url"
+	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -22,6 +25,12 @@ type Service struct {
 	PollEvery  time.Duration
 	GenTimeout time.Duration
 }
+
+const (
+	mediaSendAttempts     = 3
+	mediaSendBaseBackoff  = 700 * time.Millisecond
+	maxProviderOutputSize = 512
+)
 
 func NewService(bot *tgbotapi.BotAPI, q *db.Queries, prov provider.ModelProvider, workers int, pollEvery, genTimeout time.Duration) *Service {
 	if workers <= 0 {
@@ -87,6 +96,11 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 		s.handleFailedAttempt(ctx, job, err, latency)
 		return
 	}
+	output := strings.TrimSpace(resp.Output)
+	log.Printf(
+		"generation: provider result job_id=%d user_id=%d chat_id=%d kind=%s output=%q",
+		job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output),
+	)
 
 	// Finalize generation request metrics/cost.
 	var cText, cImg, cVid pgtype.Int4
@@ -119,12 +133,25 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 		OutputTokens:        pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
 		GenerationRequestID: pgtype.Int8{Int64: job.GenerationRequestID, Valid: true},
 	})
-	_ = s.Q.MarkGenerationJobDone(ctx, db.MarkGenerationJobDoneParams{
+	if _, err := s.Q.MarkGenerationJobDone(ctx, db.MarkGenerationJobDoneParams{
 		ID:         job.ID,
-		ResultText: pgtype.Text{String: resp.Output, Valid: true},
-	})
+		ResultText: pgtype.Text{String: output, Valid: output != ""},
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.Printf(
+				"generation: skip duplicate completion job_id=%d user_id=%d chat_id=%d kind=%s",
+				job.ID, job.UserID, job.ChatID, job.Kind,
+			)
+			return
+		}
+		log.Printf(
+			"generation: mark done failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
+			job.ID, job.UserID, job.ChatID, job.Kind, err,
+		)
+		return
+	}
 
-	s.sendMediaResult(job.ChatID, job.Kind, resp.Output)
+	s.sendMediaResult(ctx, job, output)
 }
 
 func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob, callErr error, latency int32) {
@@ -142,6 +169,10 @@ func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob,
 				Valid: true,
 			},
 		})
+		log.Printf(
+			"generation: requeued job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d/%d err=%q",
+			job.ID, job.UserID, job.ChatID, job.Kind, job.Attempts, job.MaxAttempts, errText,
+		)
 		return
 	}
 
@@ -163,7 +194,16 @@ func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob,
 		"err":    errText,
 	})
 	_ = s.refundOneCredit(ctx, job.UserID, job.Kind, meta, fmt.Sprintf("refund:job:%d", job.ID))
-	s.sendText(job.ChatID, "Ошибка генерации медиа. Попытка возвращена.")
+	log.Printf(
+		"generation: failed permanently job_id=%d user_id=%d chat_id=%d kind=%s err=%q",
+		job.ID, job.UserID, job.ChatID, job.Kind, errText,
+	)
+	if err := s.sendText(job.ChatID, "Ошибка генерации медиа. Попытка возвращена."); err != nil {
+		log.Printf(
+			"generation: send failure notice failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
+			job.ID, job.UserID, job.ChatID, job.Kind, err,
+		)
+	}
 }
 
 func (s *Service) refundOneCredit(ctx context.Context, userID int64, kind string, meta []byte, opKey string) error {
@@ -179,24 +219,108 @@ func (s *Service) refundOneCredit(ctx context.Context, userID int64, kind string
 	}
 }
 
-func (s *Service) sendMediaResult(chatID int64, kind, output string) {
-	switch kind {
-	case "image":
-		photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(output))
-		photo.Caption = "Готово ✅"
-		if _, err := s.Bot.Send(photo); err == nil {
+func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, output string) {
+	if output == "" {
+		log.Printf(
+			"generation: empty output fallback job_id=%d user_id=%d chat_id=%d kind=%s",
+			job.ID, job.UserID, job.ChatID, job.Kind,
+		)
+		if err := s.sendText(job.ChatID, "Генерация завершена, но сервис не вернул ссылку на файл."); err != nil {
+			log.Printf(
+				"generation: fallback send failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
+				job.ID, job.UserID, job.ChatID, job.Kind, err,
+			)
+		}
+		return
+	}
+
+	if !isHTTPURL(output) {
+		log.Printf(
+			"generation: invalid output url fallback job_id=%d user_id=%d chat_id=%d kind=%s output=%q",
+			job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output),
+		)
+		msg := fmt.Sprintf("Генерация завершена. Ссылка на медиа некорректна: %s", output)
+		if err := s.sendText(job.ChatID, msg); err != nil {
+			log.Printf(
+				"generation: invalid-url fallback send failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
+				job.ID, job.UserID, job.ChatID, job.Kind, err,
+			)
+		}
+		return
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= mediaSendAttempts; attempt++ {
+		switch job.Kind {
+		case "image":
+			photo := tgbotapi.NewPhoto(job.ChatID, tgbotapi.FileURL(output))
+			photo.Caption = "Готово ✅"
+			_, lastErr = s.Bot.Send(photo)
+		case "video":
+			video := tgbotapi.NewVideo(job.ChatID, tgbotapi.FileURL(output))
+			video.Caption = "Готово ✅"
+			_, lastErr = s.Bot.Send(video)
+		default:
+			lastErr = fmt.Errorf("unsupported media kind: %s", job.Kind)
+		}
+		if lastErr == nil {
+			log.Printf(
+				"generation: telegram media send ok job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d output=%q",
+				job.ID, job.UserID, job.ChatID, job.Kind, attempt, shortOutput(output),
+			)
 			return
 		}
-	case "video":
-		video := tgbotapi.NewVideo(chatID, tgbotapi.FileURL(output))
-		video.Caption = "Готово ✅"
-		if _, err := s.Bot.Send(video); err == nil {
+		log.Printf(
+			"generation: telegram media send failed job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d err=%v output=%q",
+			job.ID, job.UserID, job.ChatID, job.Kind, attempt, lastErr, shortOutput(output),
+		)
+		if attempt == mediaSendAttempts {
+			break
+		}
+		wait := time.Duration(attempt) * mediaSendBaseBackoff
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
 			return
+		case <-timer.C:
 		}
 	}
-	s.sendText(chatID, output)
+
+	msg := fmt.Sprintf("Не удалось отправить медиа как файл. Вот ссылка на результат: %s", output)
+	if err := s.sendText(job.ChatID, msg); err != nil {
+		log.Printf(
+			"generation: telegram text fallback failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
+			job.ID, job.UserID, job.ChatID, job.Kind, err,
+		)
+		return
+	}
+	log.Printf(
+		"generation: telegram fallback sent job_id=%d user_id=%d chat_id=%d kind=%s output=%q last_err=%v",
+		job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output), lastErr,
+	)
 }
 
-func (s *Service) sendText(chatID int64, text string) {
-	_, _ = s.Bot.Send(tgbotapi.NewMessage(chatID, text))
+func (s *Service) sendText(chatID int64, text string) error {
+	_, err := s.Bot.Send(tgbotapi.NewMessage(chatID, text))
+	return err
+}
+
+func isHTTPURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return false
+	}
+	return true
+}
+
+func shortOutput(raw string) string {
+	r := strings.TrimSpace(raw)
+	if len(r) <= maxProviderOutputSize {
+		return r
+	}
+	return r[:maxProviderOutputSize] + "...(truncated)"
 }

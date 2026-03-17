@@ -115,7 +115,7 @@ func (q *Queries) EnqueueGenerationJob(ctx context.Context, arg EnqueueGeneratio
 	return i, err
 }
 
-const markGenerationJobDone = `-- name: MarkGenerationJobDone :exec
+const markGenerationJobDone = `-- name: MarkGenerationJobDone :one
 UPDATE generation_jobs
 SET status = 'done',
     result_text = $2,
@@ -123,6 +123,8 @@ SET status = 'done',
     finished_at = now(),
     updated_at = now()
 WHERE id = $1
+  AND status = 'running'
+RETURNING id
 `
 
 type MarkGenerationJobDoneParams struct {
@@ -130,9 +132,11 @@ type MarkGenerationJobDoneParams struct {
 	ResultText pgtype.Text `json:"result_text"`
 }
 
-func (q *Queries) MarkGenerationJobDone(ctx context.Context, arg MarkGenerationJobDoneParams) error {
-	_, err := q.db.Exec(ctx, markGenerationJobDone, arg.ID, arg.ResultText)
-	return err
+func (q *Queries) MarkGenerationJobDone(ctx context.Context, arg MarkGenerationJobDoneParams) (int64, error) {
+	row := q.db.QueryRow(ctx, markGenerationJobDone, arg.ID, arg.ResultText)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const markGenerationJobFailed = `-- name: MarkGenerationJobFailed :exec

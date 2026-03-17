@@ -26,14 +26,16 @@ FROM picked
 WHERE g.id = picked.id
 RETURNING g.*;
 
--- name: MarkGenerationJobDone :exec
+-- name: MarkGenerationJobDone :one
 UPDATE generation_jobs
 SET status = 'done',
     result_text = $2,
     error_message = NULL,
     finished_at = now(),
     updated_at = now()
-WHERE id = $1;
+WHERE id = $1
+  AND status = 'running'
+RETURNING id;
 
 -- name: MarkGenerationJobFailed :exec
 UPDATE generation_jobs

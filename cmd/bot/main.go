@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -41,7 +43,8 @@ func main() {
 		logg.Fatal().Msg("COMET_API_KEY is required")
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	pg, err := storage.New(ctx, cfg.DBURL, cfg.DBMaxConns, cfg.DBMinConns)
 	if err != nil {
 		logg.Fatal().Err(err).Msg("pg connect")
@@ -110,12 +113,37 @@ func main() {
 	if webhookURL.Path == "" || webhookURL.Path == "/" {
 		logg.Fatal().Msg("WEBHOOK_URL must include a non-root path")
 	}
+	webhookSecret := strings.TrimSpace(cfg.WebhookSecret)
+	if webhookSecret == "" {
+		logg.Fatal().Msg("WEBHOOK_SECRET_TOKEN is required")
+	}
 
 	healthSrv.HandleFunc(webhookURL.Path, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "method must be POST"})
+			return
+		}
+		recvSecret := strings.TrimSpace(r.Header.Get("X-Telegram-Bot-Api-Secret-Token"))
+		if subtle.ConstantTimeCompare([]byte(recvSecret), []byte(webhookSecret)) != 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid webhook secret"})
+			return
+		}
+		if cfg.WebhookMaxBody > 0 {
+			r.Body = http.MaxBytesReader(w, r.Body, cfg.WebhookMaxBody)
+		}
 		upd, err := bot.API.HandleUpdate(r)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
+			var maxBodyErr *http.MaxBytesError
+			if errors.As(err, &maxBodyErr) {
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
@@ -131,9 +159,9 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
-	healthSrv.Start()
+	healthSrv.Start(ctx)
 
-	if err := bot.SetWebhook(webhookURLStr); err != nil {
+	if err := bot.SetWebhook(webhookURLStr, webhookSecret); err != nil {
 		logg.Fatal().Err(err).Msg("set webhook")
 	}
 
@@ -142,6 +170,7 @@ func main() {
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 
 	<-stop
+	cancel()
 	logg.Info().Msg("shutdown")
 	time.Sleep(300 * time.Millisecond)
 	if tr, ok := http.DefaultTransport.(*http.Transport); ok {

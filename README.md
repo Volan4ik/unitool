@@ -10,6 +10,7 @@ Telegram bot on Go with PostgreSQL, webhook delivery, retention cleanup and Prom
    - `COMET_API_KEY`
    - `DATABASE_URL`
    - `WEBHOOK_URL` (absolute URL with non-root path, example: `https://bot.example.com/tg/webhook`)
+   - `WEBHOOK_SECRET_TOKEN` (any strong random string; must match Telegram webhook secret)
 2. Start dependencies:
    - `docker compose -f deploy/docker-compose.yml up -d db`
 3. Run bot:
