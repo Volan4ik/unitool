@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,8 +28,6 @@ import (
 	"unitool/internal/weekly"
 	"unitool/internal/workers"
 	cometprov "unitool/pkg/provider/comet"
-
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 func main() {
@@ -47,7 +48,7 @@ func main() {
 	}
 	defer pg.Close()
 
-	health.New(cfg.HTTPAddr, pg).Start()
+	healthSrv := health.New(cfg.HTTPAddr, pg)
 
 	bot, err := telegram.New(cfg.TelegramToken)
 	if err != nil {
@@ -76,6 +77,7 @@ func main() {
 		modClient = moderation.NewOpenAIClient(cfg.OpenAIBase, cfg.OpenAIKey, cfg.ModerationModel, cfg.ModerationTimeout)
 	}
 	router := telegram.NewRouter(bot, pay, queries, comet, rl, modClient, editThrottle, cfg.TGEditMaxPerMin)
+	updatePool := workers.NewPool(cfg.QueueBuffer, cfg.MaxWorkers)
 	genSvc := generation.NewService(
 		bot.API,
 		queries,
@@ -100,28 +102,44 @@ func main() {
 		ret.Start(ctx)
 	}
 
-	// Webhook-less: Long Polling (для старта просто)
-	bot.DeleteWebhook()
-	u := tgbotapi.NewUpdate(0)
-	// Telegram recommends ~50s long-poll timeout
-	u.Timeout = 50
-	updates := bot.API.GetUpdatesChan(u)
+	webhookURLStr := strings.TrimSpace(cfg.WebhookURL)
+	webhookURL, err := url.Parse(webhookURLStr)
+	if err != nil || webhookURL.Scheme == "" || webhookURL.Host == "" {
+		logg.Fatal().Msg("WEBHOOK_URL must be a valid absolute URL")
+	}
+	if webhookURL.Path == "" || webhookURL.Path == "/" {
+		logg.Fatal().Msg("WEBHOOK_URL must include a non-root path")
+	}
+
+	healthSrv.HandleFunc(webhookURL.Path, func(w http.ResponseWriter, r *http.Request) {
+		upd, err := bot.API.HandleUpdate(r)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if !updatePool.TrySubmit(func(context.Context) error {
+			router.HandleUpdate(ctx, *upd)
+			return nil
+		}) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "queue is full, retry later"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+	healthSrv.Start()
+
+	if err := bot.SetWebhook(webhookURLStr); err != nil {
+		logg.Fatal().Err(err).Msg("set webhook")
+	}
 
 	// graceful shutdown
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-
-	updatePool := workers.NewPool(cfg.QueueBuffer, cfg.MaxWorkers)
-
-	go func() {
-		for upd := range updates {
-			upd := upd
-			updatePool.Submit(func(context.Context) error {
-				router.HandleUpdate(ctx, upd)
-				return nil
-			})
-		}
-	}()
 
 	<-stop
 	logg.Info().Msg("shutdown")

@@ -27,7 +27,7 @@ BEGIN
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ledger_reason') THEN
-    CREATE TYPE ledger_reason AS ENUM ('purchase','admin_grant','refund','monthly_free','spend');
+    CREATE TYPE ledger_reason AS ENUM ('purchase','admin_grant','refund','weekly_free','spend');
   END IF;
 END$$;
 
@@ -182,46 +182,6 @@ CREATE TABLE IF NOT EXISTS generation_requests (
 CREATE INDEX IF NOT EXISTS idx_gen_user_time ON generation_requests(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_gen_kind ON generation_requests(kind, created_at);
 CREATE INDEX IF NOT EXISTS idx_gen_provider_model ON generation_requests(provider, model);
-
-CREATE TABLE IF NOT EXISTS admin_broadcasts (
-  id           BIGSERIAL PRIMARY KEY,
-  author_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  title        text NOT NULL,
-  body         text NOT NULL,
-  sent_at      timestamptz,
-  created_at   timestamptz NOT NULL DEFAULT now(),
-  updated_at   timestamptz NOT NULL DEFAULT now()
-);
-
-DROP TRIGGER IF EXISTS trg_broadcasts_set_updated ON admin_broadcasts;
-CREATE TRIGGER trg_broadcasts_set_updated
-BEFORE UPDATE ON admin_broadcasts
-FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-
-CREATE TABLE IF NOT EXISTS admin_broadcast_deliveries (
-  id             BIGSERIAL PRIMARY KEY,
-  broadcast_id   BIGINT NOT NULL REFERENCES admin_broadcasts(id) ON DELETE CASCADE,
-  user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  delivered_at   timestamptz,
-  error          text,
-  UNIQUE (broadcast_id, user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_brd_deliv_brc ON admin_broadcast_deliveries(broadcast_id);
-CREATE INDEX IF NOT EXISTS idx_brd_deliv_user ON admin_broadcast_deliveries(user_id);
-
-CREATE TABLE IF NOT EXISTS settings (
-  key        text PRIMARY KEY,
-  value      jsonb NOT NULL,
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-INSERT INTO settings(key, value) VALUES
-  ('free', jsonb_build_object(
-      'text_per_month',   10,
-      'image_per_month',  3,
-      'video_per_month',  1
-  ))
-ON CONFLICT (key) DO NOTHING;
 
 CREATE OR REPLACE VIEW v_user_balances AS
 SELECT

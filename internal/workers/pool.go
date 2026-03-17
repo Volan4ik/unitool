@@ -39,3 +39,12 @@ func (p *Pool) worker() {
 }
 
 func (p *Pool) Submit(job Job) { p.jobs <- job }
+
+func (p *Pool) TrySubmit(job Job) bool {
+	select {
+	case p.jobs <- job:
+		return true
+	default:
+		return false
+	}
+}

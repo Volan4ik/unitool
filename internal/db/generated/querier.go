@@ -16,8 +16,6 @@ type Querier interface {
 	AddRefund(ctx context.Context, arg AddRefundParams) error
 	ClaimNextGenerationJob(ctx context.Context) (GenerationJob, error)
 	CountByProviderModel(ctx context.Context, arg CountByProviderModelParams) ([]CountByProviderModelRow, error)
-	CreateBroadcast(ctx context.Context, arg CreateBroadcastParams) (AdminBroadcast, error)
-	CreateDelivery(ctx context.Context, arg CreateDeliveryParams) (AdminBroadcastDelivery, error)
 	CreateOrder(ctx context.Context, arg CreateOrderParams) (CreateOrderRow, error)
 	CreatePackage(ctx context.Context, arg CreatePackageParams) (Package, error)
 	DailyUsageByKind(ctx context.Context, arg DailyUsageByKindParams) ([]DailyUsageByKindRow, error)
@@ -31,7 +29,6 @@ type Querier interface {
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByIDRow, error)
 	GetPackageByCode(ctx context.Context, code string) (Package, error)
 	GetPackageByID(ctx context.Context, id int64) (Package, error)
-	GetSetting(ctx context.Context, key string) ([]byte, error)
 	GetUserByID(ctx context.Context, id int64) (User, error)
 	GetUserByTGID(ctx context.Context, tgID int64) (User, error)
 	GetUserLedger(ctx context.Context, arg GetUserLedgerParams) ([]CreditLedger, error)
@@ -39,11 +36,7 @@ type Querier interface {
 	InsertChatMessage(ctx context.Context, arg InsertChatMessageParams) (ChatMessage, error)
 	InsertGenerationRequest(ctx context.Context, arg InsertGenerationRequestParams) (GenerationRequest, error)
 	ListActivePackages(ctx context.Context) ([]Package, error)
-	ListBroadcasts(ctx context.Context, arg ListBroadcastsParams) ([]AdminBroadcast, error)
 	ListUserOrders(ctx context.Context, arg ListUserOrdersParams) ([]ListUserOrdersRow, error)
-	MarkBroadcastSent(ctx context.Context, id int64) error
-	MarkDeliveryError(ctx context.Context, arg MarkDeliveryErrorParams) error
-	MarkDeliveryOK(ctx context.Context, id int64) error
 	MarkGenerationJobDone(ctx context.Context, arg MarkGenerationJobDoneParams) error
 	MarkGenerationJobFailed(ctx context.Context, arg MarkGenerationJobFailedParams) error
 	MarkOrderFailed(ctx context.Context, id pgtype.UUID) error
@@ -61,7 +54,6 @@ type Querier interface {
 	SumBalancesFromLedger(ctx context.Context, userID int64) (SumBalancesFromLedgerRow, error)
 	UpdatePackage(ctx context.Context, arg UpdatePackageParams) (Package, error)
 	UpsertConversation(ctx context.Context, arg UpsertConversationParams) (pgtype.UUID, error)
-	UpsertSetting(ctx context.Context, arg UpsertSettingParams) error
 	UpsertUserByTGID(ctx context.Context, arg UpsertUserByTGIDParams) (User, error)
 	UpsertUserSession(ctx context.Context, arg UpsertUserSessionParams) error
 }

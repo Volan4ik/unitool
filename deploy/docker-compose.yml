@@ -9,7 +9,6 @@ services:
     ports: ["5432:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ../migrations:/docker-entrypoint-initdb.d
   bot:
     build:
       context: ..

@@ -8,24 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type AdminBroadcast struct {
-	ID        int64              `json:"id"`
-	AuthorID  int64              `json:"author_id"`
-	Title     string             `json:"title"`
-	Body      string             `json:"body"`
-	SentAt    pgtype.Timestamptz `json:"sent_at"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AdminBroadcastDelivery struct {
-	ID          int64              `json:"id"`
-	BroadcastID int64              `json:"broadcast_id"`
-	UserID      int64              `json:"user_id"`
-	DeliveredAt pgtype.Timestamptz `json:"delivered_at"`
-	Error       pgtype.Text        `json:"error"`
-}
-
 type ChatMessage struct {
 	ID                  int64              `json:"id"`
 	UserID              int64              `json:"user_id"`
@@ -124,12 +106,6 @@ type Package struct {
 	IsActive     bool               `json:"is_active"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-}
-
-type Setting struct {
-	Key       string             `json:"key"`
-	Value     []byte             `json:"value"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type User struct {

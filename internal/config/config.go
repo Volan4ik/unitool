@@ -6,24 +6,21 @@ import (
 )
 
 type Config struct {
-	AppEnv          string        `envconfig:"APP_ENV" default:"dev"`
-	HTTPAddr        string        `envconfig:"HTTP_ADDR" default:":8080"`
-	MetricsAddr     string        `envconfig:"METRICS_ADDR" default:":9090"`
-	TelegramToken   string        `envconfig:"TELEGRAM_TOKEN" required:"true"`
-	ProviderToken   string        `envconfig:"PROVIDER_TOKEN" required:"true"` // BotFather payments token
-	WebhookURL      string        `envconfig:"WEBHOOK_URL" default:""`
-	DBURL           string        `envconfig:"DATABASE_URL" required:"true"`
-	DBMaxConns      int           `envconfig:"DB_MAX_CONNS" default:"120"`
-	DBMinConns      int           `envconfig:"DB_MIN_CONNS" default:"20"`
-	MaxWorkers      int           `envconfig:"MAX_WORKERS" default:"64"`
-	QueueBuffer     int           `envconfig:"QUEUE_BUFFER" default:"1024"`
-	RateRPS         int           `envconfig:"RATE_RPS" default:"200"`
-	RateBurst       int           `envconfig:"RATE_BURST" default:"400"`
-	ShutdownTimeout time.Duration `envconfig:"SHUTDOWN_TIMEOUT" default:"10s"`
-	AutoMigrate     bool          `envconfig:"AUTO_MIGRATE" default:"true"`
-	CometBase       string        `envconfig:"COMET_API_BASE" default:"https://api.cometapi.com"`
-	CometKey        string        `envconfig:"COMET_API_KEY" required:"true"`
-	CometTimeout    time.Duration `envconfig:"COMET_TIMEOUT" default:"25s"`
+	AppEnv        string        `envconfig:"APP_ENV" default:"dev"`
+	HTTPAddr      string        `envconfig:"HTTP_ADDR" default:":8080"`
+	MetricsAddr   string        `envconfig:"METRICS_ADDR" default:":9090"`
+	TelegramToken string        `envconfig:"TELEGRAM_TOKEN" required:"true"`
+	ProviderToken string        `envconfig:"PROVIDER_TOKEN" required:"true"` // BotFather payments token
+	WebhookURL    string        `envconfig:"WEBHOOK_URL" required:"true"`
+	DBURL         string        `envconfig:"DATABASE_URL" required:"true"`
+	DBMaxConns    int           `envconfig:"DB_MAX_CONNS" default:"120"`
+	DBMinConns    int           `envconfig:"DB_MIN_CONNS" default:"20"`
+	MaxWorkers    int           `envconfig:"MAX_WORKERS" default:"64"`
+	QueueBuffer   int           `envconfig:"QUEUE_BUFFER" default:"1024"`
+	AutoMigrate   bool          `envconfig:"AUTO_MIGRATE" default:"true"`
+	CometBase     string        `envconfig:"COMET_API_BASE" default:"https://api.cometapi.com"`
+	CometKey      string        `envconfig:"COMET_API_KEY" required:"true"`
+	CometTimeout  time.Duration `envconfig:"COMET_TIMEOUT" default:"25s"`
 	// Provider rate limiting
 	CometRPS   int `envconfig:"COMET_RPS" default:"8"`
 	CometBurst int `envconfig:"COMET_BURST" default:"8"`
