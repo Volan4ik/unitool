@@ -62,3 +62,60 @@ func PackagesInlineKeyboard(codes []string) tgbotapi.InlineKeyboardMarkup {
 	}
 	return tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
+
+func AdminMainInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Packages", "admin:packages"),
+			tgbotapi.NewInlineKeyboardButtonData("Users", "admin:users"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Stats", "admin:stats"),
+			tgbotapi.NewInlineKeyboardButtonData("Ban / Unban", "admin:ban"),
+		),
+	)
+}
+
+func AdminPackagesInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("List", "admin:packages:list"),
+			tgbotapi.NewInlineKeyboardButtonData("Add", "admin:packages:add"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Edit", "admin:packages:edit"),
+			tgbotapi.NewInlineKeyboardButtonData("Delete", "admin:packages:delete"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Activate", "admin:packages:activate"),
+			tgbotapi.NewInlineKeyboardButtonData("Deactivate", "admin:packages:deactivate"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Back", "admin:menu"),
+		),
+	)
+}
+
+func AdminUsersInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Find by user_id", "admin:users:find_id"),
+			tgbotapi.NewInlineKeyboardButtonData("Find by username", "admin:users:find_username"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Back", "admin:menu"),
+		),
+	)
+}
+
+func AdminBanInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Ban", "admin:ban:set"),
+			tgbotapi.NewInlineKeyboardButtonData("Unban", "admin:ban:unset"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Back", "admin:menu"),
+		),
+	)
+}

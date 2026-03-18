@@ -1,28 +1,32 @@
 package config
 
 import (
+	"fmt"
 	"github.com/kelseyhightower/envconfig"
+	"strconv"
+	"strings"
 	"time"
 )
 
 type Config struct {
-	AppEnv         string        `envconfig:"APP_ENV" default:"dev"`
-	HTTPAddr       string        `envconfig:"HTTP_ADDR" default:":8080"`
-	MetricsAddr    string        `envconfig:"METRICS_ADDR" default:":9090"`
-	TelegramToken  string        `envconfig:"TELEGRAM_TOKEN" required:"true"`
-	ProviderToken  string        `envconfig:"PROVIDER_TOKEN" required:"true"` // BotFather payments token
-	WebhookURL     string        `envconfig:"WEBHOOK_URL" required:"true"`
-	WebhookSecret  string        `envconfig:"WEBHOOK_SECRET_TOKEN" required:"true"`
-	WebhookMaxBody int64         `envconfig:"WEBHOOK_MAX_BODY_BYTES" default:"1048576"`
-	DBURL          string        `envconfig:"DATABASE_URL" required:"true"`
-	DBMaxConns     int           `envconfig:"DB_MAX_CONNS" default:"120"`
-	DBMinConns     int           `envconfig:"DB_MIN_CONNS" default:"20"`
-	MaxWorkers     int           `envconfig:"MAX_WORKERS" default:"64"`
-	QueueBuffer    int           `envconfig:"QUEUE_BUFFER" default:"1024"`
-	AutoMigrate    bool          `envconfig:"AUTO_MIGRATE" default:"true"`
-	CometBase      string        `envconfig:"COMET_API_BASE" default:"https://api.cometapi.com"`
-	CometKey       string        `envconfig:"COMET_API_KEY" required:"true"`
-	CometTimeout   time.Duration `envconfig:"COMET_TIMEOUT" default:"25s"`
+	AppEnv          string        `envconfig:"APP_ENV" default:"dev"`
+	HTTPAddr        string        `envconfig:"HTTP_ADDR" default:":8080"`
+	MetricsAddr     string        `envconfig:"METRICS_ADDR" default:":9090"`
+	TelegramToken   string        `envconfig:"TELEGRAM_TOKEN" required:"true"`
+	ProviderToken   string        `envconfig:"PROVIDER_TOKEN" required:"true"` // BotFather payments token
+	WebhookURL      string        `envconfig:"WEBHOOK_URL" required:"true"`
+	WebhookSecret   string        `envconfig:"WEBHOOK_SECRET_TOKEN" required:"true"`
+	WebhookMaxBody  int64         `envconfig:"WEBHOOK_MAX_BODY_BYTES" default:"1048576"`
+	WebhookStaleSec int           `envconfig:"WEBHOOK_UPDATE_STALE_SEC" default:"300"`
+	DBURL           string        `envconfig:"DATABASE_URL" required:"true"`
+	DBMaxConns      int           `envconfig:"DB_MAX_CONNS" default:"120"`
+	DBMinConns      int           `envconfig:"DB_MIN_CONNS" default:"20"`
+	MaxWorkers      int           `envconfig:"MAX_WORKERS" default:"64"`
+	QueueBuffer     int           `envconfig:"QUEUE_BUFFER" default:"1024"`
+	AutoMigrate     bool          `envconfig:"AUTO_MIGRATE" default:"true"`
+	CometBase       string        `envconfig:"COMET_API_BASE" default:"https://api.cometapi.com"`
+	CometKey        string        `envconfig:"COMET_API_KEY" required:"true"`
+	CometTimeout    time.Duration `envconfig:"COMET_TIMEOUT" default:"25s"`
 	// Provider rate limiting
 	CometRPS   int `envconfig:"COMET_RPS" default:"8"`
 	CometBurst int `envconfig:"COMET_BURST" default:"8"`
@@ -48,6 +52,8 @@ type Config struct {
 	RetentionKeepChatDays         int    `envconfig:"RETENTION_KEEP_CHAT_DAYS" default:"180"`
 	RetentionKeepCreditLedgerDays int    `envconfig:"RETENTION_KEEP_CREDIT_LEDGER_DAYS" default:"730"`
 	RetentionKeepRequestDays      int    `envconfig:"RETENTION_KEEP_REQUEST_DAYS" default:"365"`
+	RetentionKeepUpdatesDays      int    `envconfig:"RETENTION_KEEP_TELEGRAM_UPDATES_DAYS" default:"30"`
+	AdminIDs                      string `envconfig:"ADMIN_IDS" default:""`
 }
 
 func Load() (Config, error) {
@@ -55,5 +61,29 @@ func Load() (Config, error) {
 	if err := envconfig.Process("", &c); err != nil {
 		return c, err
 	}
+	if c.WebhookStaleSec <= 0 {
+		return c, fmt.Errorf("WEBHOOK_UPDATE_STALE_SEC must be > 0")
+	}
 	return c, nil
+}
+
+func (c Config) ParseAdminIDs() ([]int64, error) {
+	raw := strings.TrimSpace(c.AdminIDs)
+	if raw == "" {
+		return nil, nil
+	}
+	items := strings.Split(raw, ",")
+	out := make([]int64, 0, len(items))
+	for _, item := range items {
+		v := strings.TrimSpace(item)
+		if v == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ADMIN_IDS value %q: %w", v, err)
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }

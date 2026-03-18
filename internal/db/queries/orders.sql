@@ -6,11 +6,17 @@ RETURNING id, user_id, package_id, amount_rub, currency,
           tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
           buyer_email, provider_data, created_at, paid_at;
 
--- name: MarkOrderPrecheckout :exec
+-- name: MarkOrderPrecheckout :execrows
 UPDATE orders
 SET status='precheckout_ok'
 WHERE id=$1
   AND status='created';
+
+-- name: MarkOrderFailed :execrows
+UPDATE orders
+SET status='failed'
+WHERE id=$1
+  AND status IN ('created','precheckout_ok');
 
 -- name: MarkOrderPaid :one
 UPDATE orders
@@ -22,28 +28,9 @@ WHERE id=$1
   AND status IN ('created','precheckout_ok')
 RETURNING id;
 
--- name: MarkOrderFailed :exec
-UPDATE orders
-SET status='failed'
-WHERE id=$1
-  AND status IN ('created','precheckout_ok');
-
--- name: MarkOrderRefunded :exec
-UPDATE orders
-SET status='refunded'
-WHERE id=$1
-  AND status='paid';
-
 -- name: GetOrderByID :one
 SELECT id, user_id, package_id, amount_rub, currency,
        status::text AS status,
        tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
        buyer_email, provider_data, created_at, paid_at
 FROM orders WHERE id = $1;
-
--- name: ListUserOrders :many
-SELECT id, user_id, package_id, amount_rub, currency,
-       status::text AS status,
-       tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
-       buyer_email, provider_data, created_at, paid_at
-FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int;

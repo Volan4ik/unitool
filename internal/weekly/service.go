@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"unitool/internal/storage"
@@ -16,6 +17,7 @@ type Service struct {
 	pg         *storage.PG
 	atDayHHMM  string // UTC, format: "Mon 03:00"
 	textAmount int
+	wg         sync.WaitGroup
 }
 
 func NewService(pg *storage.PG, atDayHHMM string, textAmount int) *Service {
@@ -23,12 +25,30 @@ func NewService(pg *storage.PG, atDayHHMM string, textAmount int) *Service {
 }
 
 func (s *Service) Start(ctx context.Context) {
+	s.wg.Add(1)
 	go func() {
-		if err := s.applyWeeklyText(context.Background()); err != nil {
+		defer s.wg.Done()
+		runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if err := s.applyWeeklyText(runCtx); err != nil {
 			log.Printf("weekly: initial apply failed: %v", err)
 		}
+		cancel()
 		s.loop(ctx)
 	}()
+}
+
+func (s *Service) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Service) loop(ctx context.Context) {
@@ -49,9 +69,11 @@ func (s *Service) loop(ctx context.Context) {
 			timer.Stop()
 			return
 		case <-timer.C:
-			if err := s.applyWeeklyText(context.Background()); err != nil {
+			runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			if err := s.applyWeeklyText(runCtx); err != nil {
 				log.Printf("weekly: apply failed: %v", err)
 			}
+			cancel()
 		}
 	}
 }

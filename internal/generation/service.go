@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -24,6 +26,9 @@ type Service struct {
 	Workers    int
 	PollEvery  time.Duration
 	GenTimeout time.Duration
+	StaleAfter time.Duration
+
+	wg sync.WaitGroup
 }
 
 const (
@@ -42,6 +47,7 @@ func NewService(bot *tgbotapi.BotAPI, q *db.Queries, prov provider.ModelProvider
 	if genTimeout <= 0 {
 		genTimeout = 120 * time.Second
 	}
+	staleAfter := 10 * time.Minute
 	return &Service{
 		Bot:        bot,
 		Q:          q,
@@ -49,12 +55,36 @@ func NewService(bot *tgbotapi.BotAPI, q *db.Queries, prov provider.ModelProvider
 		Workers:    workers,
 		PollEvery:  pollEvery,
 		GenTimeout: genTimeout,
+		StaleAfter: staleAfter,
 	}
 }
 
 func (s *Service) Start(ctx context.Context) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.recoverStaleLoop(ctx)
+	}()
 	for i := 0; i < s.Workers; i++ {
-		go s.loop(ctx)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.loop(ctx)
+		}()
+	}
+}
+
+func (s *Service) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -76,7 +106,59 @@ func (s *Service) loop(ctx context.Context) {
 			continue
 		}
 
-		s.processJob(ctx, job)
+		s.runClaimedJob(ctx, job)
+	}
+}
+
+func (s *Service) runClaimedJob(ctx context.Context, job db.GenerationJob) {
+	defer func() {
+		if r := recover(); r != nil {
+			err := fmt.Errorf("panic: %v", r)
+			log.Printf(
+				"generation: panic recovered job_id=%d user_id=%d chat_id=%d kind=%s err=%v stack=%s",
+				job.ID, job.UserID, job.ChatID, job.Kind, err, string(debug.Stack()),
+			)
+			s.handleFailedAttempt(ctx, job, err, 0)
+		}
+	}()
+	s.processJob(ctx, job)
+}
+
+func (s *Service) recoverStaleLoop(ctx context.Context) {
+	if s.StaleAfter <= 0 {
+		s.StaleAfter = 10 * time.Minute
+	}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	s.recoverStaleRunningJobs(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.recoverStaleRunningJobs(ctx)
+		}
+	}
+}
+
+func (s *Service) recoverStaleRunningJobs(ctx context.Context) {
+	staleSeconds := int32(s.StaleAfter / time.Second)
+	if staleSeconds <= 0 {
+		staleSeconds = 600
+	}
+	requeued, err := s.Q.RequeueStaleRunningJobs(ctx, staleSeconds)
+	if err != nil {
+		log.Printf("generation: reclaim stale running jobs failed: %v", err)
+		return
+	}
+	failed, err := s.Q.FailStaleRunningJobs(ctx, staleSeconds)
+	if err != nil {
+		log.Printf("generation: fail stale running jobs failed: %v", err)
+		return
+	}
+	if requeued > 0 || failed > 0 {
+		log.Printf("generation: recovered stale jobs requeued=%d failed=%d stale_after_sec=%d", requeued, failed, staleSeconds)
 	}
 }
 
@@ -103,20 +185,18 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 	)
 
 	// Finalize generation request metrics/cost.
-	var cText, cImg, cVid pgtype.Int4
+	var cImg, cVid pgtype.Int4
 	switch job.Kind {
 	case "image":
 		cImg = pgtype.Int4{Int32: 1, Valid: true}
 	case "video":
 		cVid = pgtype.Int4{Int32: 1, Valid: true}
-	case "text":
-		cText = pgtype.Int4{Int32: 1, Valid: true}
 	}
 	_ = s.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
 		ID:               job.GenerationRequestID,
 		OutputTokens:     pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
 		LatencyMs:        pgtype.Int4{Int32: latency, Valid: true},
-		CostCreditsText:  cText,
+		CostCreditsText:  pgtype.Int4{},
 		CostCreditsImage: cImg,
 		CostCreditsVideo: cVid,
 	})

@@ -11,47 +11,55 @@ import (
 )
 
 type Querier interface {
-	AddAdminGrant(ctx context.Context, arg AddAdminGrantParams) error
-	AddPurchaseCredits(ctx context.Context, arg AddPurchaseCreditsParams) error
-	AddRefund(ctx context.Context, arg AddRefundParams) error
+	AddPurchaseCredits(ctx context.Context, arg AddPurchaseCreditsParams) (int64, error)
+	BeginUpdateProcessing(ctx context.Context, arg BeginUpdateProcessingParams) (int64, error)
 	ClaimNextGenerationJob(ctx context.Context) (GenerationJob, error)
-	CountByProviderModel(ctx context.Context, arg CountByProviderModelParams) ([]CountByProviderModelRow, error)
+	CountActiveUsers(ctx context.Context) (int64, error)
+	CountBannedUsers(ctx context.Context) (int64, error)
+	CountGenerationRequests(ctx context.Context) (int64, error)
+	CountGenerationRequestsByUser(ctx context.Context, userID int64) (int64, error)
+	CountNewUsersSince(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error)
+	CountUsers(ctx context.Context) (int64, error)
 	CreateOrder(ctx context.Context, arg CreateOrderParams) (CreateOrderRow, error)
 	CreatePackage(ctx context.Context, arg CreatePackageParams) (Package, error)
-	DailyUsageByKind(ctx context.Context, arg DailyUsageByKindParams) ([]DailyUsageByKindRow, error)
-	DeactivatePackage(ctx context.Context, id int64) error
+	DeletePackage(ctx context.Context, id int64) (int64, error)
 	EnqueueGenerationJob(ctx context.Context, arg EnqueueGenerationJobParams) (GenerationJob, error)
 	FailGenerationRequest(ctx context.Context, arg FailGenerationRequestParams) error
+	FailStaleRunningJobs(ctx context.Context, dollar_1 int32) (int64, error)
 	FinishGenerationRequest(ctx context.Context, arg FinishGenerationRequestParams) error
-	GetAdmins(ctx context.Context) ([]GetAdminsRow, error)
 	GetBalancesByUserID(ctx context.Context, id int64) (GetBalancesByUserIDRow, error)
 	GetLastChatHistory(ctx context.Context, arg GetLastChatHistoryParams) ([]GetLastChatHistoryRow, error)
+	GetLastPaidPackageByUser(ctx context.Context, userID int64) (GetLastPaidPackageByUserRow, error)
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByIDRow, error)
 	GetPackageByCode(ctx context.Context, code string) (Package, error)
 	GetPackageByID(ctx context.Context, id int64) (Package, error)
+	GetTelegramUpdateByID(ctx context.Context, updateID int64) (TelegramUpdate, error)
 	GetUserByID(ctx context.Context, id int64) (User, error)
 	GetUserByTGID(ctx context.Context, tgID int64) (User, error)
-	GetUserLedger(ctx context.Context, arg GetUserLedgerParams) ([]CreditLedger, error)
 	GetUserSession(ctx context.Context, userID int64) (GetUserSessionRow, error)
 	InsertChatMessage(ctx context.Context, arg InsertChatMessageParams) (ChatMessage, error)
 	InsertGenerationRequest(ctx context.Context, arg InsertGenerationRequestParams) (GenerationRequest, error)
 	ListActivePackages(ctx context.Context) ([]Package, error)
-	ListUserOrders(ctx context.Context, arg ListUserOrdersParams) ([]ListUserOrdersRow, error)
+	ListPackages(ctx context.Context) ([]Package, error)
 	MarkGenerationJobDone(ctx context.Context, arg MarkGenerationJobDoneParams) (int64, error)
 	MarkGenerationJobFailed(ctx context.Context, arg MarkGenerationJobFailedParams) error
-	MarkOrderFailed(ctx context.Context, id pgtype.UUID) error
+	MarkOrderFailed(ctx context.Context, id pgtype.UUID) (int64, error)
 	MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (pgtype.UUID, error)
-	MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) error
-	MarkOrderRefunded(ctx context.Context, id pgtype.UUID) error
+	MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) (int64, error)
+	MarkUpdateDone(ctx context.Context, updateID int64) (int64, error)
+	MarkUpdateFailed(ctx context.Context, arg MarkUpdateFailedParams) (int64, error)
 	RefundImage(ctx context.Context, arg RefundImageParams) error
 	RefundText(ctx context.Context, arg RefundTextParams) error
 	RefundVideo(ctx context.Context, arg RefundVideoParams) error
 	RequeueGenerationJob(ctx context.Context, arg RequeueGenerationJobParams) error
-	SetMediaAgreed(ctx context.Context, id int64) error
+	RequeueStaleRunningJobs(ctx context.Context, dollar_1 int32) (int64, error)
+	SearchUsersByUsername(ctx context.Context, arg SearchUsersByUsernameParams) ([]User, error)
+	SetPackageActive(ctx context.Context, arg SetPackageActiveParams) (int64, error)
+	SetUserBanStatus(ctx context.Context, arg SetUserBanStatusParams) (int64, error)
 	SpendImage(ctx context.Context, arg SpendImageParams) error
 	SpendText(ctx context.Context, arg SpendTextParams) error
 	SpendVideo(ctx context.Context, arg SpendVideoParams) error
-	SumBalancesFromLedger(ctx context.Context, userID int64) (SumBalancesFromLedgerRow, error)
+	TopUsersByGenerationCount(ctx context.Context, limit int32) ([]TopUsersByGenerationCountRow, error)
 	UpdatePackage(ctx context.Context, arg UpdatePackageParams) (Package, error)
 	UpsertConversation(ctx context.Context, arg UpsertConversationParams) (pgtype.UUID, error)
 	UpsertUserByTGID(ctx context.Context, arg UpsertUserByTGIDParams) (User, error)

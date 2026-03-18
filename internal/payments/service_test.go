@@ -3,6 +3,8 @@ package payments
 import (
 	"encoding/json"
 	"testing"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 func TestBuildProviderDataReceiptWithEmail(t *testing.T) {
@@ -39,5 +41,38 @@ func TestBuildProviderDataReceiptWithoutEmail(t *testing.T) {
 	}
 	if out.Receipt.Customer != nil {
 		t.Fatal("expected customer to be omitted when email is empty")
+	}
+}
+
+func TestHandlePreCheckoutNilNoPanic(t *testing.T) {
+	svc := &Service{}
+	svc.HandlePreCheckout(nil, nil)
+}
+
+func TestValidatePreCheckoutEmptyPayload(t *testing.T) {
+	svc := &Service{}
+	ok, msg, err := svc.validatePreCheckout(nil, &tgbotapi.PreCheckoutQuery{InvoicePayload: ""})
+	if ok {
+		t.Fatal("expected pre-checkout validation to fail on empty payload")
+	}
+	if msg == "" {
+		t.Fatal("expected error message")
+	}
+	if err != nil {
+		t.Fatalf("expected nil infra error, got %v", err)
+	}
+}
+
+func TestValidatePreCheckoutInvalidPayload(t *testing.T) {
+	svc := &Service{}
+	ok, msg, err := svc.validatePreCheckout(nil, &tgbotapi.PreCheckoutQuery{InvoicePayload: "not-a-uuid"})
+	if ok {
+		t.Fatal("expected pre-checkout validation to fail on invalid uuid payload")
+	}
+	if msg == "" {
+		t.Fatal("expected error message")
+	}
+	if err != nil {
+		t.Fatalf("expected nil infra error, got %v", err)
 	}
 }

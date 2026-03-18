@@ -27,4 +27,25 @@
 - 30–60 минут нагрузочного прогона без деградации  
 - алерты и health-check включены
 
-Если хочешь, могу сразу собрать тебе готовый тестовый контур: `testcontainers` для Postgres + E2E хелпер + k6 сценарий под ваш бот.
+
+Из корня проекта `/Users/vladimir/unitool`:
+
+- Все тесты:
+go test ./...
+
+- С подробным выводом:
+go test -v ./...
+
+- Конкретный пакет:
+go test -v ./internal/weekly
+
+- Один конкретный тест:
+go test -v ./internal/weekly -run TestWeeklyService
+
+- Без кэша (честный прогон):
+go test -count=1 ./...
+
+- С race detector (медленнее, но полезно):
+go test -race ./...
+
+- У тебя также есть shortcut в `Makefile` для генерации sqlc, но тесты запускаются напрямую через `go test`.

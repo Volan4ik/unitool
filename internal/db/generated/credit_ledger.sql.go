@@ -11,32 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const addAdminGrant = `-- name: AddAdminGrant :exec
-INSERT INTO credit_ledger (user_id,
-  delta_text, delta_image, delta_video, reason, meta)
-VALUES ($1,$2,$3,$4,'admin_grant',$5)
-`
-
-type AddAdminGrantParams struct {
-	UserID     int64  `json:"user_id"`
-	DeltaText  int32  `json:"delta_text"`
-	DeltaImage int32  `json:"delta_image"`
-	DeltaVideo int32  `json:"delta_video"`
-	Meta       []byte `json:"meta"`
-}
-
-func (q *Queries) AddAdminGrant(ctx context.Context, arg AddAdminGrantParams) error {
-	_, err := q.db.Exec(ctx, addAdminGrant,
-		arg.UserID,
-		arg.DeltaText,
-		arg.DeltaImage,
-		arg.DeltaVideo,
-		arg.Meta,
-	)
-	return err
-}
-
-const addPurchaseCredits = `-- name: AddPurchaseCredits :exec
+const addPurchaseCredits = `-- name: AddPurchaseCredits :execrows
 INSERT INTO credit_ledger (user_id, order_id,
   delta_text, delta_image, delta_video, reason, meta, op_key)
 VALUES ($1,$2,$3,$4,$5,'purchase',$6,$7)
@@ -53,8 +28,8 @@ type AddPurchaseCreditsParams struct {
 	OpKey      pgtype.Text `json:"op_key"`
 }
 
-func (q *Queries) AddPurchaseCredits(ctx context.Context, arg AddPurchaseCreditsParams) error {
-	_, err := q.db.Exec(ctx, addPurchaseCredits,
+func (q *Queries) AddPurchaseCredits(ctx context.Context, arg AddPurchaseCreditsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, addPurchaseCredits,
 		arg.UserID,
 		arg.OrderID,
 		arg.DeltaText,
@@ -63,79 +38,10 @@ func (q *Queries) AddPurchaseCredits(ctx context.Context, arg AddPurchaseCredits
 		arg.Meta,
 		arg.OpKey,
 	)
-	return err
-}
-
-const addRefund = `-- name: AddRefund :exec
-INSERT INTO credit_ledger (user_id, order_id,
-  delta_text, delta_image, delta_video, reason, meta, op_key)
-VALUES ($1,$2,$3,$4,$5,'refund',$6,$7)
-ON CONFLICT (op_key) DO NOTHING
-`
-
-type AddRefundParams struct {
-	UserID     int64       `json:"user_id"`
-	OrderID    pgtype.UUID `json:"order_id"`
-	DeltaText  int32       `json:"delta_text"`
-	DeltaImage int32       `json:"delta_image"`
-	DeltaVideo int32       `json:"delta_video"`
-	Meta       []byte      `json:"meta"`
-	OpKey      pgtype.Text `json:"op_key"`
-}
-
-func (q *Queries) AddRefund(ctx context.Context, arg AddRefundParams) error {
-	_, err := q.db.Exec(ctx, addRefund,
-		arg.UserID,
-		arg.OrderID,
-		arg.DeltaText,
-		arg.DeltaImage,
-		arg.DeltaVideo,
-		arg.Meta,
-		arg.OpKey,
-	)
-	return err
-}
-
-const getUserLedger = `-- name: GetUserLedger :many
-SELECT id, user_id, order_id, gen_kind, delta_text, delta_image, delta_video, reason, meta, created_at, op_key FROM credit_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int
-`
-
-type GetUserLedgerParams struct {
-	UserID  int64 `json:"user_id"`
-	Column2 int32 `json:"column_2"`
-	Column3 int32 `json:"column_3"`
-}
-
-func (q *Queries) GetUserLedger(ctx context.Context, arg GetUserLedgerParams) ([]CreditLedger, error) {
-	rows, err := q.db.Query(ctx, getUserLedger, arg.UserID, arg.Column2, arg.Column3)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	var items []CreditLedger
-	for rows.Next() {
-		var i CreditLedger
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.OrderID,
-			&i.GenKind,
-			&i.DeltaText,
-			&i.DeltaImage,
-			&i.DeltaVideo,
-			&i.Reason,
-			&i.Meta,
-			&i.CreatedAt,
-			&i.OpKey,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return result.RowsAffected(), nil
 }
 
 const refundImage = `-- name: RefundImage :exec
@@ -238,26 +144,4 @@ type SpendVideoParams struct {
 func (q *Queries) SpendVideo(ctx context.Context, arg SpendVideoParams) error {
 	_, err := q.db.Exec(ctx, spendVideo, arg.UserID, arg.Meta, arg.OpKey)
 	return err
-}
-
-const sumBalancesFromLedger = `-- name: SumBalancesFromLedger :one
-SELECT
-  COALESCE(SUM(delta_text),0)   AS text_sum,
-  COALESCE(SUM(delta_image),0)  AS image_sum,
-  COALESCE(SUM(delta_video),0)  AS video_sum
-FROM credit_ledger
-WHERE user_id = $1
-`
-
-type SumBalancesFromLedgerRow struct {
-	TextSum  interface{} `json:"text_sum"`
-	ImageSum interface{} `json:"image_sum"`
-	VideoSum interface{} `json:"video_sum"`
-}
-
-func (q *Queries) SumBalancesFromLedger(ctx context.Context, userID int64) (SumBalancesFromLedgerRow, error) {
-	row := q.db.QueryRow(ctx, sumBalancesFromLedger, userID)
-	var i SumBalancesFromLedgerRow
-	err := row.Scan(&i.TextSum, &i.ImageSum, &i.VideoSum)
-	return i, err
 }

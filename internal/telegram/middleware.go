@@ -9,9 +9,9 @@ import (
 )
 
 // EnsureUser upserts the user by TG ID and returns internal user id.
-func EnsureUser(ctx context.Context, q *db.Queries, m *tgbotapi.Message) (context.Context, int64, error) {
+func EnsureUser(ctx context.Context, q *db.Queries, m *tgbotapi.Message) (int64, error) {
 	if m == nil || m.From == nil {
-		return ctx, 0, nil
+		return 0, nil
 	}
 	var username, firstName, lastName, lang string
 	username = m.From.UserName
@@ -27,7 +27,7 @@ func EnsureUser(ctx context.Context, q *db.Queries, m *tgbotapi.Message) (contex
 		LangCode:  pgtype.Text{String: lang, Valid: lang != ""},
 	})
 	if err != nil {
-		return ctx, 0, err
+		return 0, err
 	}
-	return ctx, u.ID, nil
+	return u.ID, nil
 }

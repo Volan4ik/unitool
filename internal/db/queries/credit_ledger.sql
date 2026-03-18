@@ -1,18 +1,7 @@
--- name: AddPurchaseCredits :exec
+-- name: AddPurchaseCredits :execrows
 INSERT INTO credit_ledger (user_id, order_id,
   delta_text, delta_image, delta_video, reason, meta, op_key)
 VALUES ($1,$2,$3,$4,$5,'purchase',$6,$7)
-ON CONFLICT (op_key) DO NOTHING;
-
--- name: AddAdminGrant :exec
-INSERT INTO credit_ledger (user_id,
-  delta_text, delta_image, delta_video, reason, meta)
-VALUES ($1,$2,$3,$4,'admin_grant',$5);
-
--- name: AddRefund :exec
-INSERT INTO credit_ledger (user_id, order_id,
-  delta_text, delta_image, delta_video, reason, meta, op_key)
-VALUES ($1,$2,$3,$4,$5,'refund',$6,$7)
 ON CONFLICT (op_key) DO NOTHING;
 
 -- name: SpendText :exec
@@ -44,14 +33,3 @@ ON CONFLICT (op_key) DO NOTHING;
 INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
 VALUES ($1,'video',1,'refund',$2,$3)
 ON CONFLICT (op_key) DO NOTHING;
-
--- name: GetUserLedger :many
-SELECT * FROM credit_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int;
-
--- name: SumBalancesFromLedger :one
-SELECT
-  COALESCE(SUM(delta_text),0)   AS text_sum,
-  COALESCE(SUM(delta_image),0)  AS image_sum,
-  COALESCE(SUM(delta_video),0)  AS video_sum
-FROM credit_ledger
-WHERE user_id = $1;

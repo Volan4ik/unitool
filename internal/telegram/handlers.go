@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"unitool/internal/admin"
 	db "unitool/internal/db/generated"
 	"unitool/internal/metrics"
 	"unitool/internal/moderation"
@@ -22,6 +25,7 @@ import (
 
 type Router struct {
 	Bot           *Bot
+	Admin         *admin.Service
 	Pay           *payments.Service
 	Q             *db.Queries
 	Prov          provider.ModelProvider
@@ -29,6 +33,12 @@ type Router struct {
 	Moderation    moderation.Client
 	EditThrottle  time.Duration
 	EditMaxPerMin int
+
+	adminIDsMu sync.RWMutex
+	adminIDs   map[int64]struct{}
+
+	adminFlowMu sync.Mutex
+	adminFlow   map[int64]adminFlowState
 }
 
 type UserState struct {
@@ -36,9 +46,34 @@ type UserState struct {
 	Model string
 }
 
-func NewRouter(b *Bot, p *payments.Service, q *db.Queries, prov provider.ModelProvider, rl *rate.Limiter, mod moderation.Client, editThrottle time.Duration, editMaxPerMin int) *Router {
+type adminFlowState struct {
+	Action string
+}
+
+const (
+	tgMessageLimit     = 4096
+	tgEditPreviewLimit = 4000
+)
+
+func NewRouter(
+	b *Bot,
+	adminSvc *admin.Service,
+	adminIDs []int64,
+	p *payments.Service,
+	q *db.Queries,
+	prov provider.ModelProvider,
+	rl *rate.Limiter,
+	mod moderation.Client,
+	editThrottle time.Duration,
+	editMaxPerMin int,
+) *Router {
+	idMap := make(map[int64]struct{}, len(adminIDs))
+	for _, id := range adminIDs {
+		idMap[id] = struct{}{}
+	}
 	return &Router{
 		Bot:           b,
+		Admin:         adminSvc,
 		Pay:           p,
 		Q:             q,
 		Prov:          prov,
@@ -46,66 +81,89 @@ func NewRouter(b *Bot, p *payments.Service, q *db.Queries, prov provider.ModelPr
 		Moderation:    mod,
 		EditThrottle:  editThrottle,
 		EditMaxPerMin: editMaxPerMin,
+		adminIDs:      idMap,
+		adminFlow:     make(map[int64]adminFlowState),
 	}
 }
 
-func (r *Router) HandleUpdate(ctx context.Context, upd tgbotapi.Update) {
+func (r *Router) HandleUpdate(ctx context.Context, upd tgbotapi.Update) error {
 	if upd.PreCheckoutQuery != nil {
-		r.Pay.HandlePreCheckout(upd.PreCheckoutQuery)
-		return
+		return r.Pay.HandlePreCheckout(ctx, upd.PreCheckoutQuery)
 	}
 	if upd.CallbackQuery != nil {
-		r.handleCallback(ctx, upd.CallbackQuery)
-		return
+		return r.handleCallback(ctx, upd.CallbackQuery)
 	}
 	if m := upd.Message; m != nil {
 		if m.SuccessfulPayment != nil {
-			r.Pay.HandleSuccessfulPayment(m)
-			return
+			return r.Pay.HandleSuccessfulPayment(ctx, m)
 		}
-		nctx, userID, err := EnsureUser(ctx, r.Q, m)
+		userID, err := EnsureUser(ctx, r.Q, m)
 		if err != nil {
 			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Ошибка авторизации пользователя: %v", err)))
-			return
+			return err
+		}
+		if m.From != nil && !r.isAdminTGID(m.From.ID) {
+			banned, berr := r.isUserBanned(ctx, m.From.ID)
+			if berr != nil {
+				log.Printf("check banned failed tg_id=%d err=%v", m.From.ID, berr)
+				return berr
+			}
+			if banned {
+				r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Ваш аккаунт заблокирован. Обратитесь к администратору."))
+				return nil
+			}
 		}
 		if m.IsCommand() {
-			r.handleCommand(nctx, m, userID)
-			return
+			return r.handleCommand(ctx, m, userID)
 		}
-		r.handleMessage(nctx, m, userID)
+		return r.handleMessage(ctx, m, userID)
 	}
+	return nil
 }
 
-func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID int64) {
+func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID int64) error {
 	switch m.Command() {
 	case "start":
 		greet := tgbotapi.NewMessage(m.Chat.ID, "Привет! Выберите действие")
 		greet.ReplyMarkup = MainReplyKeyboard()
-		r.Bot.API.Send(greet)
+		if _, err := r.Bot.API.Send(greet); err != nil {
+			return err
+		}
+	case "admin":
+		return r.handleAdminCommand(ctx, m)
 	default:
 		msg := tgbotapi.NewMessage(m.Chat.ID, "Выберите действие")
 		msg.ReplyMarkup = MainReplyKeyboard()
-		r.Bot.API.Send(msg)
+		if _, err := r.Bot.API.Send(msg); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID int64) {
+func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID int64) error {
 	txt := strings.TrimSpace(m.Text)
+	if m.From != nil {
+		handled, err := r.handleAdminTextInput(ctx, m, m.From.ID, txt)
+		if err != nil {
+			return err
+		}
+		if handled {
+			return nil
+		}
+	}
 	switch txt {
 	case "Сгенерировать текст":
-		r.selectMode(ctx, m.Chat.ID, userID, "text")
-		return
+		return r.selectMode(ctx, m.Chat.ID, userID, "text")
 	case "Создать картинку":
-		r.selectMode(ctx, m.Chat.ID, userID, "image")
-		return
+		return r.selectMode(ctx, m.Chat.ID, userID, "image")
 	case "Создать видео":
-		r.selectMode(ctx, m.Chat.ID, userID, "video")
-		return
+		return r.selectMode(ctx, m.Chat.ID, userID, "video")
 	case "Мой профиль":
 		bal, err := r.Q.GetBalancesByUserID(ctx, userID)
 		if err != nil {
 			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Ошибка профиля: %v", err)))
-			return
+			return err
 		}
 		text := fmt.Sprintf("Доступно генераций:\n • Текст: %d\n • Фото: %d\n • Видео: %d\n\nБонус: +100 текстовых генераций каждую неделю.", bal.TextBalance, bal.ImageBalance, bal.VideoBalance)
 		msg := tgbotapi.NewMessage(m.Chat.ID, text)
@@ -115,22 +173,21 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 		msg2 := tgbotapi.NewMessage(m.Chat.ID, "Вы можете приобрести пакеты:")
 		msg2.ReplyMarkup = buyBtn
 		r.Bot.API.Send(msg2)
-		return
+		return nil
 	case "Купить":
-		r.showPackages(ctx, m.Chat.ID)
-		return
+		return r.showPackages(ctx, m.Chat.ID)
 	}
 
 	st, ok, err := r.getState(ctx, userID)
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось загрузить состояние пользователя. Попробуйте снова."))
-		return
+		return err
 	}
 	if !ok || st.Mode == "" || st.Model == "" || txt == "" {
 		msg := tgbotapi.NewMessage(m.Chat.ID, "Выберите действие")
 		msg.ReplyMarkup = MainReplyKeyboard()
 		r.Bot.API.Send(msg)
-		return
+		return nil
 	}
 
 	kind := st.Mode
@@ -139,45 +196,45 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 		msg := tgbotapi.NewMessage(m.Chat.ID, "Выбранная модель не поддерживается. Пожалуйста, выберите другую.")
 		msg.ReplyMarkup = MainReplyKeyboard()
 		r.Bot.API.Send(msg)
-		return
+		return nil
 	}
 
 	if kind == "image" || kind == "video" {
-		r.handleAsyncMediaPrompt(ctx, m, userID, kind, modelID, txt)
-		return
+		return r.handleAsyncMediaPrompt(ctx, m, userID, kind, modelID, txt)
 	}
-	r.handleSyncPrompt(ctx, m, userID, kind, modelID, txt)
+	return r.handleSyncPrompt(ctx, m, userID, modelID, txt)
 }
 
-func (r *Router) selectMode(ctx context.Context, chatID, userID int64, mode string) {
+func (r *Router) selectMode(ctx context.Context, chatID, userID int64, mode string) error {
 	if !isSupportedMode(mode) {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Этот режим недоступен."))
-		return
+		return nil
 	}
 	opts := ModelUIList(mode)
 	if len(opts) == 0 {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Для этого режима пока нет доступных моделей."))
-		return
+		return nil
 	}
 	def := opts[0]
 	if err := r.setState(ctx, userID, UserState{Mode: mode, Model: def}); err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Не удалось сохранить выбор режима. Попробуйте снова."))
-		return
+		return err
 	}
-	r.sendModelsMenu(chatID, mode, def)
+	return r.sendModelsMenu(chatID, mode, def)
 }
 
-func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, userID int64, kind, modelID, txt string) {
+func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, userID int64, modelID, txt string) error {
+	kind := "text"
 	providerName := "comet"
 	if r.RL != nil && !r.RL.Allow() {
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Сервис перегружен, попробуйте позже."))
-		return
+		return nil
 	}
 
 	convID, err := r.ensureConvID(ctx, userID, kind)
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось открыть контекст диалога. Попробуйте снова."))
-		return
+		return err
 	}
 
 	hist, _ := r.Q.GetLastChatHistory(ctx, db.GetLastChatHistoryParams{
@@ -202,7 +259,7 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 	})
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Внутренняя ошибка. Попробуйте позже."))
-		return
+		return err
 	}
 
 	if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
@@ -225,7 +282,7 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 			LatencyMs:    pgtype.Int4{},
 		})
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось сохранить историю. Попробуйте позже."))
-		return
+		return nil
 	}
 
 	chargeMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "sync_generation"})
@@ -237,7 +294,7 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 			LatencyMs:    pgtype.Int4{},
 		})
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Недостаточно генераций для %s", kindToRus(kind))))
-		return
+		return nil
 	}
 
 	history := make([]provider.Message, 0, len(hist))
@@ -259,9 +316,14 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 	var resp provider.ModelResponse
 	pendingMsgID := 0
 	pendingChatID := m.Chat.ID
+	streamEditFailed := false
 	if kind == "text" {
-		pending, _ := r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "⌛ Генерирую…"))
-		pendingMsgID = pending.MessageID
+		pending, sendErr := r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "⌛ Генерирую…"))
+		if sendErr == nil {
+			pendingMsgID = pending.MessageID
+		} else {
+			log.Printf("stream: send pending message failed chat_id=%d err=%v", m.Chat.ID, sendErr)
+		}
 		lastEdit := time.Now()
 		var acc strings.Builder
 		throttle := r.EditThrottle
@@ -272,14 +334,20 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 		windowStart := time.Now()
 		onDelta := func(piece string) error {
 			acc.WriteString(piece)
+			if pendingMsgID == 0 {
+				return nil
+			}
 			if time.Since(lastEdit) >= throttle {
 				if time.Since(windowStart) >= time.Minute {
 					windowStart = time.Now()
 					edits = 0
 				}
 				if r.EditMaxPerMin <= 0 || edits < r.EditMaxPerMin {
-					edit := tgbotapi.NewEditMessageText(m.Chat.ID, pending.MessageID, acc.String())
-					r.Bot.API.Request(edit)
+					editText := firstTelegramChunk(acc.String(), tgEditPreviewLimit)
+					if err := r.editMessageText(m.Chat.ID, pendingMsgID, editText); err != nil {
+						streamEditFailed = true
+						log.Printf("stream: edit delta failed chat_id=%d msg_id=%d err=%v", m.Chat.ID, pendingMsgID, err)
+					}
 					lastEdit = time.Now()
 					edits++
 					metrics.StreamEdits.WithLabelValues(kind).Inc()
@@ -294,11 +362,22 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 			History: history,
 			Params:  map[string]any{"kind": kind},
 		}, onDelta)
-		if acc.Len() > 0 {
-			finalText := acc.String()
-			if finalText != "" {
-				edit := tgbotapi.NewEditMessageText(m.Chat.ID, pending.MessageID, finalText)
-				r.Bot.API.Request(edit)
+		finalText := strings.TrimSpace(resp.Output)
+		if finalText == "" {
+			finalText = acc.String()
+		}
+		if finalText != "" {
+			if pendingMsgID != 0 && !streamEditFailed {
+				if err := r.sendFinalStreamText(m.Chat.ID, pendingMsgID, finalText); err != nil {
+					streamEditFailed = true
+					log.Printf("stream: finalize edit failed chat_id=%d msg_id=%d err=%v", m.Chat.ID, pendingMsgID, err)
+				}
+			}
+			if pendingMsgID == 0 || streamEditFailed {
+				if err := r.sendTextChunks(m.Chat.ID, finalText); err != nil {
+					log.Printf("stream: fallback chunk send failed chat_id=%d err=%v", m.Chat.ID, err)
+					_, _ = r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Ответ готов, но не удалось отправить его полностью."))
+				}
 			}
 		}
 	} else {
@@ -322,30 +401,23 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 		refundMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "sync_generation_failed"})
 		_ = r.refundOneCredit(ctx, userID, kind, refundMeta, fmt.Sprintf("refund:gen:%d:%s", gr.ID, kind))
 		if pendingMsgID != 0 {
-			edit := tgbotapi.NewEditMessageText(pendingChatID, pendingMsgID, "Ошибка генерации. Попытка возвращена.")
-			r.Bot.API.Request(edit)
+			if e := r.editMessageText(pendingChatID, pendingMsgID, "Ошибка генерации. Попытка возвращена."); e != nil {
+				_, _ = r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Ошибка генерации. Попытка возвращена."))
+			}
 		} else {
 			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Сервис перегружен, попробуйте позже. Попытка возвращена."))
 		}
-		return
+		return nil
 	}
 
-	var cText, cImg, cVid pgtype.Int4
-	switch kind {
-	case "text":
-		cText = pgtype.Int4{Int32: 1, Valid: true}
-	case "image":
-		cImg = pgtype.Int4{Int32: 1, Valid: true}
-	case "video":
-		cVid = pgtype.Int4{Int32: 1, Valid: true}
-	}
+	cText := pgtype.Int4{Int32: 1, Valid: true}
 	_ = r.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
 		ID:               gr.ID,
 		OutputTokens:     pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
 		LatencyMs:        pgtype.Int4{Int32: int32(latency), Valid: true},
 		CostCreditsText:  cText,
-		CostCreditsImage: cImg,
-		CostCreditsVideo: cVid,
+		CostCreditsImage: pgtype.Int4{},
+		CostCreditsVideo: pgtype.Int4{},
 	})
 	if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
 		UserID:              userID,
@@ -363,20 +435,16 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось сохранить ответ в историю."))
 	}
 
-	if kind != "text" {
-		msg := tgbotapi.NewMessage(m.Chat.ID, resp.Output)
-		msg.ReplyMarkup = MainReplyKeyboard()
-		r.Bot.API.Send(msg)
-	}
+	return nil
 }
 
-func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message, userID int64, kind, modelID, txt string) {
+func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message, userID int64, kind, modelID, txt string) error {
 	providerName := "comet"
 	if r.Moderation != nil {
 		mr, err := r.Moderation.CheckPrompt(ctx, txt)
 		if err != nil {
 			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось проверить промпт модерацией. Попробуйте позже."))
-			return
+			return err
 		}
 		if !mr.Allowed {
 			msg := "Промпт отклонен модерацией. Измените описание и попробуйте снова."
@@ -384,14 +452,14 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 				msg = fmt.Sprintf("Промпт отклонен модерацией (%s). Измените описание и попробуйте снова.", strings.Join(mr.Reasons, ", "))
 			}
 			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, msg))
-			return
+			return nil
 		}
 	}
 
 	convID, err := r.ensureConvID(ctx, userID, kind)
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось открыть контекст диалога. Попробуйте снова."))
-		return
+		return err
 	}
 
 	gr, err := r.Q.InsertGenerationRequest(ctx, db.InsertGenerationRequestParams{
@@ -406,7 +474,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 	})
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Внутренняя ошибка. Попробуйте позже."))
-		return
+		return err
 	}
 
 	if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
@@ -429,7 +497,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 			LatencyMs:    pgtype.Int4{},
 		})
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось сохранить промпт. Попробуйте позже."))
-		return
+		return nil
 	}
 
 	chargeMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "async_generation"})
@@ -441,7 +509,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 			LatencyMs:    pgtype.Int4{},
 		})
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Недостаточно генераций для %s", kindToRus(kind))))
-		return
+		return nil
 	}
 
 	_, err = r.Q.EnqueueGenerationJob(ctx, db.EnqueueGenerationJobParams{
@@ -465,45 +533,82 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 		refundMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "queue_failed"})
 		_ = r.refundOneCredit(ctx, userID, kind, refundMeta, fmt.Sprintf("refund:gen:%d:%s", gr.ID, kind))
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось поставить задачу в очередь. Попытка возвращена."))
-		return
+		return nil
 	}
 
 	r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Задача принята. Начал генерацию, пришлю результат сюда по готовности."))
+	return nil
 }
 
-func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery) {
+func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery) error {
+	if cq == nil {
+		return nil
+	}
+	chatID, hasChat := callbackChatID(cq)
 	if cq.From != nil {
-		pseudoMsg := &tgbotapi.Message{From: &tgbotapi.User{ID: cq.From.ID, UserName: cq.From.UserName, FirstName: cq.From.FirstName, LastName: cq.From.LastName, LanguageCode: cq.From.LanguageCode}, Chat: &tgbotapi.Chat{ID: cq.Message.Chat.ID}}
+		pseudoMsg := &tgbotapi.Message{
+			From: &tgbotapi.User{
+				ID:           cq.From.ID,
+				UserName:     cq.From.UserName,
+				FirstName:    cq.From.FirstName,
+				LastName:     cq.From.LastName,
+				LanguageCode: cq.From.LanguageCode,
+			},
+			Chat: &tgbotapi.Chat{ID: chatID},
+		}
 		var err error
-		ctx, _, err = EnsureUser(ctx, r.Q, pseudoMsg)
+		_, err = EnsureUser(ctx, r.Q, pseudoMsg)
 		if err != nil {
-			r.Bot.API.Send(tgbotapi.NewMessage(cq.Message.Chat.ID, fmt.Sprintf("Ошибка авторизации пользователя: %v", err)))
-			return
+			if hasChat {
+				r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка авторизации пользователя: %v", err)))
+			}
+			r.Bot.API.Request(tgbotapi.NewCallback(cq.ID, "auth error"))
+			return err
 		}
 	}
 
 	data := cq.Data
 	parts := strings.Split(data, ":")
 	if len(parts) == 0 {
-		return
+		return nil
 	}
 	scope := parts[0]
-	chatID := cq.Message.Chat.ID
+	if scope == "admin" {
+		if err := r.handleAdminCallback(ctx, cq, parts); err != nil {
+			return err
+		}
+		r.Bot.API.Request(tgbotapi.NewCallback(cq.ID, ""))
+		return nil
+	}
+	if cq.From == nil {
+		r.Bot.API.Request(tgbotapi.NewCallback(cq.ID, "forbidden"))
+		return nil
+	}
+	if cq.Message == nil {
+		r.Bot.API.Request(tgbotapi.NewCallback(cq.ID, "unsupported callback"))
+		return nil
+	}
+	chatID = cq.Message.Chat.ID
 	userTGID := cq.From.ID
 	u, err := r.Q.GetUserByTGID(ctx, userTGID)
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка пользователя: %v", err)))
-		return
+		return err
+	}
+	if u.IsBanned && !r.isAdminTGID(userTGID) {
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Ваш аккаунт заблокирован. Обратитесь к администратору."))
+		r.Bot.API.Request(tgbotapi.NewCallback(cq.ID, "forbidden"))
+		return nil
 	}
 
 	switch scope {
 	case "mode":
 		if len(parts) < 2 {
-			return
+			return nil
 		}
 		mode := parts[1]
 		if !isSupportedMode(mode) {
-			return
+			return nil
 		}
 		list := ModelUIList(mode)
 		def := ""
@@ -511,71 +616,89 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 			def = list[0]
 		}
 		if def != "" {
-			_ = r.setState(ctx, u.ID, UserState{Mode: mode, Model: def})
+			if err := r.setState(ctx, u.ID, UserState{Mode: mode, Model: def}); err != nil {
+				return err
+			}
 		}
 		kb := ModelsInlineKeyboard(mode, def)
 		edit := tgbotapi.NewEditMessageReplyMarkup(chatID, cq.Message.MessageID, kb)
-		r.Bot.API.Request(edit)
+		if _, err := r.Bot.API.Request(edit); err != nil {
+			return err
+		}
 	case "model":
 		if len(parts) < 3 {
-			return
+			return nil
 		}
 		mode := parts[1]
 		if !isSupportedMode(mode) {
-			return
+			return nil
 		}
 		model := parts[2]
 		if _, ok := ResolveModel(mode, model); ok {
-			_ = r.setState(ctx, u.ID, UserState{Mode: mode, Model: model})
+			if err := r.setState(ctx, u.ID, UserState{Mode: mode, Model: model}); err != nil {
+				return err
+			}
 		}
 		kb := ModelsInlineKeyboard(mode, model)
 		edit := tgbotapi.NewEditMessageReplyMarkup(chatID, cq.Message.MessageID, kb)
-		r.Bot.API.Request(edit)
+		if _, err := r.Bot.API.Request(edit); err != nil {
+			return err
+		}
 		note := tgbotapi.NewMessage(chatID, fmt.Sprintf("Напишите промпт для %s — я отвечу в этом чате.", kindToRus(mode)))
 		note.ReplyMarkup = MainReplyKeyboard()
-		r.Bot.API.Send(note)
+		if _, err := r.Bot.API.Send(note); err != nil {
+			return err
+		}
 	case "buy":
 		if len(parts) < 2 {
-			return
+			return nil
 		}
 		code := parts[1]
 		if code == "menu" {
-			r.showPackages(ctx, chatID)
-			return
+			if err := r.showPackages(ctx, chatID); err != nil {
+				return err
+			}
+			return nil
 		}
 		pkg, err := r.Q.GetPackageByCode(ctx, code)
 		if err != nil {
 			r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Пакет не найден: %s", code)))
-			return
+			return err
 		}
 		p := payments.Package{ID: pkg.ID, Title: pkg.Title, PriceRub: int(pkg.PriceRub)}
-		if _, err := r.Pay.SendInvoiceForPackage(chatID, u.ID, p, ""); err != nil {
+		if _, err := r.Pay.SendInvoiceForPackage(ctx, chatID, u.ID, p, ""); err != nil {
 			r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка оплаты: %v", err)))
-			return
+			return err
 		}
 	}
 	r.Bot.API.Request(tgbotapi.NewCallback(cq.ID, ""))
+	return nil
 }
 
-func (r *Router) sendModelsMenu(chatID int64, mode, selected string) {
+func (r *Router) sendModelsMenu(chatID int64, mode, selected string) error {
 	kb := ModelsInlineKeyboard(mode, selected)
 	msg := tgbotapi.NewMessage(chatID, "Выберите модель")
 	msg.ReplyMarkup = MainReplyKeyboard()
-	r.Bot.API.Send(msg)
+	if _, err := r.Bot.API.Send(msg); err != nil {
+		return err
+	}
 	msg2 := tgbotapi.NewMessage(chatID, "Модели:")
 	msg2.ReplyMarkup = kb
-	r.Bot.API.Send(msg2)
+	if _, err := r.Bot.API.Send(msg2); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (r *Router) showPackages(ctx context.Context, chatID int64) {
+func (r *Router) showPackages(ctx context.Context, chatID int64) error {
 	pkgs, err := r.Q.ListActivePackages(ctx)
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Не удалось загрузить пакеты. Попробуйте позже."))
-		return
+		return err
 	}
 	if len(pkgs) == 0 {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Сейчас нет доступных пакетов."))
-		return
+		return nil
 	}
 
 	lines := make([]string, 0, len(pkgs))
@@ -589,10 +712,15 @@ func (r *Router) showPackages(ctx context.Context, chatID int64) {
 	kb := PackagesInlineKeyboard(codes)
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ReplyMarkup = MainReplyKeyboard()
-	r.Bot.API.Send(msg)
+	if _, err := r.Bot.API.Send(msg); err != nil {
+		return err
+	}
 	msg2 := tgbotapi.NewMessage(chatID, "Пакеты:")
 	msg2.ReplyMarkup = kb
-	r.Bot.API.Send(msg2)
+	if _, err := r.Bot.API.Send(msg2); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *Router) ensureConvID(ctx context.Context, userID int64, kind string) (uuid.UUID, error) {
@@ -674,4 +802,97 @@ func kindToRus(kind string) string {
 
 func isSupportedMode(mode string) bool {
 	return mode == "text" || mode == "image" || mode == "video"
+}
+
+func (r *Router) isUserBanned(ctx context.Context, tgID int64) (bool, error) {
+	u, err := r.Q.GetUserByTGID(ctx, tgID)
+	if err != nil {
+		return false, err
+	}
+	return u.IsBanned, nil
+}
+
+func (r *Router) isAdminTGID(tgID int64) bool {
+	r.adminIDsMu.RLock()
+	defer r.adminIDsMu.RUnlock()
+	_, ok := r.adminIDs[tgID]
+	return ok
+}
+
+func callbackChatID(cq *tgbotapi.CallbackQuery) (int64, bool) {
+	if cq == nil {
+		return 0, false
+	}
+	if cq.Message != nil {
+		return cq.Message.Chat.ID, true
+	}
+	if cq.From != nil {
+		return cq.From.ID, true
+	}
+	return 0, false
+}
+
+func (r *Router) editMessageText(chatID int64, msgID int, text string) error {
+	if msgID == 0 {
+		return errors.New("message id is zero")
+	}
+	_, err := r.Bot.API.Request(tgbotapi.NewEditMessageText(chatID, msgID, text))
+	return err
+}
+
+func (r *Router) sendFinalStreamText(chatID int64, msgID int, text string) error {
+	chunks := splitTelegramText(text, tgMessageLimit)
+	if len(chunks) == 0 {
+		return nil
+	}
+	if err := r.editMessageText(chatID, msgID, chunks[0]); err != nil {
+		return err
+	}
+	for i := 1; i < len(chunks); i++ {
+		if _, err := r.Bot.API.Send(tgbotapi.NewMessage(chatID, chunks[i])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Router) sendTextChunks(chatID int64, text string) error {
+	chunks := splitTelegramText(text, tgMessageLimit)
+	if len(chunks) == 0 {
+		return nil
+	}
+	for _, ch := range chunks {
+		if _, err := r.Bot.API.Send(tgbotapi.NewMessage(chatID, ch)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func firstTelegramChunk(text string, limit int) string {
+	chunks := splitTelegramText(text, limit)
+	if len(chunks) == 0 {
+		return ""
+	}
+	return chunks[0]
+}
+
+func splitTelegramText(text string, limit int) []string {
+	if limit <= 0 {
+		limit = tgMessageLimit
+	}
+	if text == "" {
+		return nil
+	}
+	rs := []rune(text)
+	chunks := make([]string, 0, (len(rs)/limit)+1)
+	for len(rs) > 0 {
+		if len(rs) <= limit {
+			chunks = append(chunks, string(rs))
+			break
+		}
+		chunks = append(chunks, string(rs[:limit]))
+		rs = rs[limit:]
+	}
+	return chunks
 }

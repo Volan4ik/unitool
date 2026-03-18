@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	migr "unitool"
+	"unitool/internal/admin"
 	"unitool/internal/config"
 	db "unitool/internal/db/generated"
 	"unitool/internal/generation"
@@ -30,6 +32,8 @@ import (
 	"unitool/internal/weekly"
 	"unitool/internal/workers"
 	cometprov "unitool/pkg/provider/comet"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func main() {
@@ -66,6 +70,11 @@ func main() {
 	}
 
 	queries := db.New(pg.Pool)
+	adminIDs, err := cfg.ParseAdminIDs()
+	if err != nil {
+		logg.Fatal().Err(err).Msg("parse ADMIN_IDS")
+	}
+	adminSvc := admin.NewService(queries)
 	pay := payments.NewService(bot.API, cfg.ProviderToken, pg.Pool, queries)
 	// Comet provider (OpenAI-compatible endpoints; minimal wiring)
 	comet := cometprov.New(cfg.CometBase, cfg.CometKey, cfg.CometTimeout)
@@ -79,7 +88,7 @@ func main() {
 		}
 		modClient = moderation.NewOpenAIClient(cfg.OpenAIBase, cfg.OpenAIKey, cfg.ModerationModel, cfg.ModerationTimeout)
 	}
-	router := telegram.NewRouter(bot, pay, queries, comet, rl, modClient, editThrottle, cfg.TGEditMaxPerMin)
+	router := telegram.NewRouter(bot, adminSvc, adminIDs, pay, queries, comet, rl, modClient, editThrottle, cfg.TGEditMaxPerMin)
 	updatePool := workers.NewPool(cfg.QueueBuffer, cfg.MaxWorkers)
 	genSvc := generation.NewService(
 		bot.API,
@@ -94,15 +103,17 @@ func main() {
 	// Weekly free text generations
 	weeklySvc := weekly.NewService(pg, cfg.WeeklyCronAtUTC, cfg.WeeklyTextGenerations)
 	weeklySvc.Start(ctx)
+	var retentionSvc *retention.Service
 	if cfg.RetentionEnabled {
-		ret := retention.NewService(
+		retentionSvc = retention.NewService(
 			pg,
 			cfg.RetentionDailyAtUTC,
 			cfg.RetentionKeepChatDays,
 			cfg.RetentionKeepCreditLedgerDays,
 			cfg.RetentionKeepRequestDays,
+			cfg.RetentionKeepUpdatesDays,
 		)
-		ret.Start(ctx)
+		retentionSvc.Start(ctx)
 	}
 
 	webhookURLStr := strings.TrimSpace(cfg.WebhookURL)
@@ -147,10 +158,120 @@ func main() {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
-		if !updatePool.TrySubmit(func(context.Context) error {
-			router.HandleUpdate(ctx, *upd)
+		updateID := int64(upd.UpdateID)
+		if updateID > 0 {
+			inserted, err := queries.BeginUpdateProcessing(r.Context(), db.BeginUpdateProcessingParams{
+				UpdateID: updateID,
+				Column2:  int32(cfg.WebhookStaleSec),
+			})
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to deduplicate update"})
+				return
+			}
+			if inserted == 0 {
+				row, gerr := queries.GetTelegramUpdateByID(r.Context(), updateID)
+				if gerr != nil {
+					logg.Warn().
+						Int64("update_id", updateID).
+						Err(gerr).
+						Msg("webhook duplicate update skipped; state lookup failed")
+				} else {
+					logg.Info().
+						Int64("update_id", updateID).
+						Str("status", row.Status).
+						Int32("attempt_count", row.AttemptCount).
+						Msg("webhook duplicate update skipped")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "duplicate": true})
+				return
+			}
+		}
+		if !updatePool.TrySubmit(func(context.Context) (jobErr error) {
+			markFailed := func(errText string) {
+				if updateID <= 0 {
+					return
+				}
+				failCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				rows, err := queries.MarkUpdateFailed(failCtx, db.MarkUpdateFailedParams{
+					UpdateID:  updateID,
+					LastError: toText(errText),
+				})
+				if err != nil {
+					logg.Error().Err(err).Int64("update_id", updateID).Msg("failed to mark update failed")
+					return
+				}
+				if rows == 0 {
+					row, gerr := queries.GetTelegramUpdateByID(failCtx, updateID)
+					if gerr != nil {
+						logg.Warn().
+							Int64("update_id", updateID).
+							Str("last_error", errText).
+							Err(gerr).
+							Msg("mark update failed affected 0 rows; state lookup failed")
+						return
+					}
+					logg.Warn().
+						Int64("update_id", updateID).
+						Str("status", row.Status).
+						Int32("attempt_count", row.AttemptCount).
+						Str("last_error", errText).
+						Msg("mark update failed affected 0 rows")
+				}
+			}
+			defer func() {
+				if rcv := recover(); rcv != nil {
+					markFailed(fmt.Sprintf("panic: %v", rcv))
+					jobErr = fmt.Errorf("panic while handling update_id=%d: %v", updateID, rcv)
+				}
+			}()
+			if err := router.HandleUpdate(ctx, *upd); err != nil {
+				jobErr = fmt.Errorf("handle update failed: %w", err)
+				markFailed(jobErr.Error())
+				return
+			}
+			if updateID > 0 {
+				doneCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				doneRows, err := queries.MarkUpdateDone(doneCtx, updateID)
+				cancel()
+				if err != nil {
+					jobErr = fmt.Errorf("mark update done failed: %w", err)
+					markFailed(jobErr.Error())
+					return
+				}
+				if doneRows == 0 {
+					jobErr = fmt.Errorf("mark update done affected 0 rows")
+					row, gerr := queries.GetTelegramUpdateByID(doneCtx, updateID)
+					if gerr != nil {
+						logg.Warn().
+							Int64("update_id", updateID).
+							Err(gerr).
+							Msg("mark update done affected 0 rows; state lookup failed")
+					} else {
+						logg.Warn().
+							Int64("update_id", updateID).
+							Str("status", row.Status).
+							Int32("attempt_count", row.AttemptCount).
+							Str("last_error", row.LastError.String).
+							Msg("mark update done affected 0 rows")
+					}
+					markFailed(jobErr.Error())
+					return
+				}
+			}
 			return nil
 		}) {
+			if updateID > 0 {
+				failCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				_, _ = queries.MarkUpdateFailed(failCtx, db.MarkUpdateFailedParams{
+					UpdateID:  updateID,
+					LastError: toText("queue_full"),
+				})
+				cancel()
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "queue is full, retry later"})
@@ -170,10 +291,37 @@ func main() {
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 
 	<-stop
+	logg.Info().Msg("shutdown start")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer shutdownCancel()
+
+	if err := healthSrv.Shutdown(shutdownCtx); err != nil {
+		logg.Error().Err(err).Msg("health server shutdown")
+	}
 	cancel()
-	logg.Info().Msg("shutdown")
-	time.Sleep(300 * time.Millisecond)
+	if err := updatePool.StopAndWait(shutdownCtx); err != nil {
+		logg.Error().Err(err).Msg("update pool stop")
+	}
+	if err := genSvc.Wait(shutdownCtx); err != nil {
+		logg.Error().Err(err).Msg("generation service wait")
+	}
+	if err := weeklySvc.Wait(shutdownCtx); err != nil {
+		logg.Error().Err(err).Msg("weekly service wait")
+	}
+	if retentionSvc != nil {
+		if err := retentionSvc.Wait(shutdownCtx); err != nil {
+			logg.Error().Err(err).Msg("retention service wait")
+		}
+	}
+	healthSrv.Wait()
+	logg.Info().Msg("shutdown complete")
+
 	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
 		tr.CloseIdleConnections()
 	}
+}
+
+func toText(v string) pgtype.Text {
+	return pgtype.Text{String: v, Valid: v != ""}
 }

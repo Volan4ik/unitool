@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/google/uuid"
@@ -30,7 +31,7 @@ type Service struct {
 	ProviderToken string
 	Pool          *pgxpool.Pool
 	Q             *db.Queries
-	DBCtx         context.Context
+	DBTimeout     time.Duration
 }
 
 func NewService(bot *tgbotapi.BotAPI, providerToken string, pool *pgxpool.Pool, q *db.Queries) *Service {
@@ -39,16 +40,18 @@ func NewService(bot *tgbotapi.BotAPI, providerToken string, pool *pgxpool.Pool, 
 		ProviderToken: providerToken,
 		Pool:          pool,
 		Q:             q,
-		DBCtx:         context.Background(),
+		DBTimeout:     5 * time.Second,
 	}
 }
 
-func (s *Service) SendInvoiceForPackage(chatID int64, userID int64, pkg Package, buyerEmail string) (string, error) {
+func (s *Service) SendInvoiceForPackage(ctx context.Context, chatID int64, userID int64, pkg Package, buyerEmail string) (string, error) {
 	orderUUID := uuid.New()
 	pdStr := buildProviderDataReceipt(pkg.Title, pkg.PriceRub, buyerEmail)
 	providerJSON := []byte(pdStr)
+	dbCtx, cancel := s.withDBTimeout(ctx)
+	defer cancel()
 
-	_, err := s.Q.CreateOrder(s.DBCtx, db.CreateOrderParams{
+	_, err := s.Q.CreateOrder(dbCtx, db.CreateOrderParams{
 		ID:        pgtype.UUID{Bytes: orderUUID, Valid: true},
 		UserID:    userID,
 		PackageID: pkg.ID,
@@ -88,76 +91,111 @@ func (s *Service) SendInvoiceForPackage(chatID int64, userID int64, pkg Package,
 	return orderUUID.String(), nil
 }
 
-func (s *Service) HandlePreCheckout(pcq *tgbotapi.PreCheckoutQuery) {
-	// Answer OK immediately
-	resp := tgbotapi.PreCheckoutConfig{PreCheckoutQueryID: pcq.ID, OK: true}
+func (s *Service) HandlePreCheckout(ctx context.Context, pcq *tgbotapi.PreCheckoutQuery) error {
+	if pcq == nil {
+		return nil
+	}
+	ok, msg, validateErr := s.validatePreCheckout(ctx, pcq)
+	resp := tgbotapi.PreCheckoutConfig{
+		PreCheckoutQueryID: pcq.ID,
+		OK:                 ok,
+	}
+	if !ok {
+		resp.ErrorMessage = msg
+	}
 	if _, err := s.Bot.Request(resp); err != nil {
 		log.Println("answerPreCheckoutQuery error:", err)
+		return err
 	}
-
-	if pcq.InvoicePayload != "" {
-		if u, err := uuid.Parse(pcq.InvoicePayload); err == nil {
-			if err := s.Q.MarkOrderPrecheckout(s.DBCtx, pgtype.UUID{Bytes: u, Valid: true}); err != nil {
-				log.Printf("mark precheckout failed: %v", err)
-			}
-		} else {
-			log.Printf("invalid payload uuid: %v", err)
-		}
+	if validateErr != nil {
+		return validateErr
 	}
+	return nil
 }
 
-func (s *Service) HandleSuccessfulPayment(msg *tgbotapi.Message) {
+func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Message) error {
 	sp := msg.SuccessfulPayment
 	if sp == nil {
-		return
+		return nil
 	}
 	payload := sp.InvoicePayload
 	if payload == "" {
-		return
+		return nil
 	}
 
 	orderUUID, err := uuid.Parse(payload)
 	if err != nil {
 		log.Printf("invalid order payload: %v", err)
-		return
+		return err
 	}
-	order, err := s.Q.GetOrderByID(s.DBCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
+	dbCtx, cancel := s.withDBTimeout(ctx)
+	defer cancel()
+	order, err := s.Q.GetOrderByID(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
 	if err != nil {
 		log.Printf("get order: %v", err)
-		return
+		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но заказ не найден. Свяжитесь с поддержкой."))
+		return err
 	}
 	amountRub := sp.TotalAmount / 100
 	if sp.Currency != "RUB" || int32(amountRub) != order.AmountRub {
 		log.Printf("payment mismatch: currency=%s amount=%d expected=%d", sp.Currency, amountRub, order.AmountRub)
-		return
+		s.failOrder(dbCtx, orderUUID, "payment_mismatch")
+		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Ошибка проверки платежа. Пожалуйста, свяжитесь с поддержкой."))
+		return nil
 	}
-	tx, err := s.Pool.Begin(s.DBCtx)
+	tx, err := s.Pool.Begin(dbCtx)
 	if err != nil {
 		log.Printf("begin payment tx failed: %v", err)
-		return
+		s.failOrder(dbCtx, orderUUID, "payment_tx_begin_failed")
+		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
+		return err
 	}
-	defer func() { _ = tx.Rollback(s.DBCtx) }()
+	committed := false
+	failReason := ""
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(dbCtx)
+			if failReason != "" {
+				s.failOrder(dbCtx, orderUUID, failReason)
+			}
+		}
+	}()
 
 	qtx := s.Q.WithTx(tx)
-	if _, err := qtx.MarkOrderPaid(s.DBCtx, db.MarkOrderPaidParams{
+	if _, err := qtx.MarkOrderPaid(dbCtx, db.MarkOrderPaidParams{
 		ID:                      pgtype.UUID{Bytes: orderUUID, Valid: true},
 		TgPaymentChargeID:       pgtype.Text{String: sp.TelegramPaymentChargeID, Valid: sp.TelegramPaymentChargeID != ""},
 		ProviderPaymentChargeID: pgtype.Text{String: sp.ProviderPaymentChargeID, Valid: sp.ProviderPaymentChargeID != ""},
 		BuyerEmail:              pgtype.Text{},
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// Illegal transition or already processed by another worker.
-			return
+			current, gerr := s.Q.GetOrderByID(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
+			if gerr == nil && current.Status == "paid" {
+				log.Printf("order already paid (duplicate update): %s", orderUUID.String())
+				return nil
+			}
+			if gerr != nil {
+				log.Printf("illegal payment transition and order lookup failed for order %s: %v", orderUUID.String(), gerr)
+				failReason = "illegal_transition_lookup_failed"
+				return gerr
+			}
+			log.Printf("illegal payment transition for order %s", orderUUID.String())
+			failReason = "illegal_payment_transition"
+			return fmt.Errorf("illegal payment transition for order %s, current status=%s", orderUUID.String(), current.Status)
 		}
 		log.Printf("mark order paid failed: %v", err)
-		return
+		failReason = "mark_paid_failed"
+		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
+		return err
 	}
 
 	// Grant credits atomically in the same transaction as payment status update.
-	pkg, err := qtx.GetPackageByID(s.DBCtx, order.PackageID)
+	pkg, err := qtx.GetPackageByID(dbCtx, order.PackageID)
 	if err != nil {
 		log.Printf("get package: %v", err)
-		return
+		failReason = "package_lookup_failed"
+		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но пакет не найден. Свяжитесь с поддержкой."))
+		return err
 	}
 	meta := map[string]any{
 		"order_id":     orderUUID.String(),
@@ -167,7 +205,7 @@ func (s *Service) HandleSuccessfulPayment(msg *tgbotapi.Message) {
 	}
 	metaBytes, _ := json.Marshal(meta)
 	opKey := fmt.Sprintf("purchase:%s", orderUUID.String())
-	if err := qtx.AddPurchaseCredits(s.DBCtx, db.AddPurchaseCreditsParams{
+	rows, err := qtx.AddPurchaseCredits(dbCtx, db.AddPurchaseCreditsParams{
 		UserID:     order.UserID,
 		OrderID:    pgtype.UUID{Bytes: orderUUID, Valid: true},
 		DeltaText:  pkg.TextCredits,
@@ -175,17 +213,101 @@ func (s *Service) HandleSuccessfulPayment(msg *tgbotapi.Message) {
 		DeltaVideo: pkg.VideoCredits,
 		Meta:       metaBytes,
 		OpKey:      pgtype.Text{String: opKey, Valid: true},
-	}); err != nil {
+	})
+	if err != nil {
 		log.Printf("grant credits: %v", err)
-		return
+		failReason = "grant_credits_failed"
+		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но начисление не удалось. Свяжитесь с поддержкой."))
+		return err
 	}
-	if err := tx.Commit(s.DBCtx); err != nil {
+	if rows == 0 {
+		log.Printf("grant credits affected 0 rows for order %s", orderUUID.String())
+		failReason = "grant_credits_conflict"
+		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но начисление не удалось. Свяжитесь с поддержкой."))
+		return fmt.Errorf("grant credits affected 0 rows for order %s", orderUUID.String())
+	}
+	if err := tx.Commit(dbCtx); err != nil {
 		log.Printf("commit payment tx failed: %v", err)
-		return
+		failReason = "payment_commit_failed"
+		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не завершилась. Свяжитесь с поддержкой."))
+		return err
 	}
+	committed = true
 
 	confirm := tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("Оплата успешна ✅\nЗаказ: %s\nСумма: %d ₽", payload, amountRub))
-	s.Bot.Send(confirm)
+	if _, err := s.Bot.Send(confirm); err != nil {
+		log.Printf("payment success confirmation send failed order=%s err=%v", orderUUID.String(), err)
+	}
+	return nil
+}
+
+func (s *Service) validatePreCheckout(ctx context.Context, pcq *tgbotapi.PreCheckoutQuery) (bool, string, error) {
+	if pcq.InvoicePayload == "" {
+		return false, "Не удалось подтвердить заказ", nil
+	}
+	dbCtx, cancel := s.withDBTimeout(ctx)
+	defer cancel()
+	orderUUID, err := uuid.Parse(pcq.InvoicePayload)
+	if err != nil {
+		log.Printf("invalid payload uuid: %v", err)
+		return false, "Некорректный идентификатор заказа", nil
+	}
+	order, err := s.Q.GetOrderByID(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("precheckout order not found: %s", orderUUID.String())
+			return false, "Заказ не найден", nil
+		}
+		log.Printf("precheckout get order failed: %v", err)
+		return false, "Временная ошибка подтверждения заказа", err
+	}
+	if pcq.Currency != "RUB" || int32(pcq.TotalAmount/100) != order.AmountRub {
+		log.Printf(
+			"precheckout mismatch order=%s currency=%s amount=%d expected_amount=%d",
+			orderUUID.String(), pcq.Currency, pcq.TotalAmount/100, order.AmountRub,
+		)
+		s.failOrder(dbCtx, orderUUID, "precheckout_mismatch")
+		return false, "Сумма заказа не совпадает", nil
+	}
+
+	affected, err := s.Q.MarkOrderPrecheckout(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
+	if err != nil {
+		log.Printf("mark precheckout failed: %v", err)
+		return false, "Временная ошибка подтверждения заказа", err
+	}
+	if affected == 0 {
+		if order.Status == "precheckout_ok" || order.Status == "paid" {
+			// Duplicate pre-checkout update.
+			return true, "", nil
+		}
+		return false, "Заказ уже недоступен для оплаты", nil
+	}
+	return true, "", nil
+}
+
+func (s *Service) failOrder(ctx context.Context, orderUUID uuid.UUID, reason string) {
+	if ctx == nil || ctx.Err() != nil {
+		freshCtx, cancel := s.withDBTimeout(context.Background())
+		defer cancel()
+		ctx = freshCtx
+	}
+	rows, err := s.Q.MarkOrderFailed(ctx, pgtype.UUID{Bytes: orderUUID, Valid: true})
+	if err != nil {
+		log.Printf("mark order failed error order=%s reason=%s err=%v", orderUUID.String(), reason, err)
+		return
+	}
+	log.Printf("mark order failed order=%s reason=%s affected=%d", orderUUID.String(), reason, rows)
+}
+
+func (s *Service) withDBTimeout(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	timeout := s.DBTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 type providerData struct {

@@ -100,12 +100,24 @@ type Package struct {
 	Code         string             `json:"code"`
 	Title        string             `json:"title"`
 	PriceRub     int32              `json:"price_rub"`
+	Currency     string             `json:"currency"`
 	TextCredits  int32              `json:"text_credits"`
 	ImageCredits int32              `json:"image_credits"`
 	VideoCredits int32              `json:"video_credits"`
 	IsActive     bool               `json:"is_active"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type TelegramUpdate struct {
+	UpdateID            int64              `json:"update_id"`
+	Status              string             `json:"status"`
+	AttemptCount        int32              `json:"attempt_count"`
+	ProcessingStartedAt pgtype.Timestamptz `json:"processing_started_at"`
+	DoneAt              pgtype.Timestamptz `json:"done_at"`
+	LastError           pgtype.Text        `json:"last_error"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
 type User struct {
@@ -117,6 +129,9 @@ type User struct {
 	LangCode     pgtype.Text        `json:"lang_code"`
 	Email        pgtype.Text        `json:"email"`
 	IsAdmin      bool               `json:"is_admin"`
+	IsBanned     bool               `json:"is_banned"`
+	BannedAt     pgtype.Timestamptz `json:"banned_at"`
+	BannedReason pgtype.Text        `json:"banned_reason"`
 	MediaAgreed  bool               `json:"media_agreed"`
 	TextBalance  int32              `json:"text_balance"`
 	ImageBalance int32              `json:"image_balance"`

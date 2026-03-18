@@ -11,33 +11,80 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const getAdmins = `-- name: GetAdmins :many
-SELECT id, tg_id FROM users WHERE is_admin = TRUE
+const countActiveUsers = `-- name: CountActiveUsers :one
+SELECT COUNT(*)::bigint AS cnt
+FROM users
+WHERE is_banned = FALSE
 `
 
-type GetAdminsRow struct {
-	ID   int64 `json:"id"`
-	TgID int64 `json:"tg_id"`
+func (q *Queries) CountActiveUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveUsers)
+	var cnt int64
+	err := row.Scan(&cnt)
+	return cnt, err
 }
 
-func (q *Queries) GetAdmins(ctx context.Context) ([]GetAdminsRow, error) {
-	rows, err := q.db.Query(ctx, getAdmins)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GetAdminsRow
-	for rows.Next() {
-		var i GetAdminsRow
-		if err := rows.Scan(&i.ID, &i.TgID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+const countBannedUsers = `-- name: CountBannedUsers :one
+SELECT COUNT(*)::bigint AS cnt
+FROM users
+WHERE is_banned = TRUE
+`
+
+func (q *Queries) CountBannedUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countBannedUsers)
+	var cnt int64
+	err := row.Scan(&cnt)
+	return cnt, err
+}
+
+const countGenerationRequests = `-- name: CountGenerationRequests :one
+SELECT COUNT(*)::bigint AS cnt
+FROM generation_requests
+`
+
+func (q *Queries) CountGenerationRequests(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countGenerationRequests)
+	var cnt int64
+	err := row.Scan(&cnt)
+	return cnt, err
+}
+
+const countGenerationRequestsByUser = `-- name: CountGenerationRequestsByUser :one
+SELECT COUNT(*)::bigint AS cnt
+FROM generation_requests
+WHERE user_id = $1
+`
+
+func (q *Queries) CountGenerationRequestsByUser(ctx context.Context, userID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countGenerationRequestsByUser, userID)
+	var cnt int64
+	err := row.Scan(&cnt)
+	return cnt, err
+}
+
+const countNewUsersSince = `-- name: CountNewUsersSince :one
+SELECT COUNT(*)::bigint AS cnt
+FROM users
+WHERE created_at >= $1
+`
+
+func (q *Queries) CountNewUsersSince(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
+	row := q.db.QueryRow(ctx, countNewUsersSince, createdAt)
+	var cnt int64
+	err := row.Scan(&cnt)
+	return cnt, err
+}
+
+const countUsers = `-- name: CountUsers :one
+SELECT COUNT(*)::bigint AS cnt
+FROM users
+`
+
+func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countUsers)
+	var cnt int64
+	err := row.Scan(&cnt)
+	return cnt, err
 }
 
 const getBalancesByUserID = `-- name: GetBalancesByUserID :one
@@ -57,8 +104,44 @@ func (q *Queries) GetBalancesByUserID(ctx context.Context, id int64) (GetBalance
 	return i, err
 }
 
+const getLastPaidPackageByUser = `-- name: GetLastPaidPackageByUser :one
+SELECT
+  p.code,
+  p.title,
+  p.price_rub,
+  p.currency,
+  o.paid_at
+FROM orders o
+JOIN packages p ON p.id = o.package_id
+WHERE o.user_id = $1
+  AND o.status = 'paid'
+ORDER BY o.paid_at DESC NULLS LAST, o.created_at DESC
+LIMIT 1
+`
+
+type GetLastPaidPackageByUserRow struct {
+	Code     string             `json:"code"`
+	Title    string             `json:"title"`
+	PriceRub int32              `json:"price_rub"`
+	Currency string             `json:"currency"`
+	PaidAt   pgtype.Timestamptz `json:"paid_at"`
+}
+
+func (q *Queries) GetLastPaidPackageByUser(ctx context.Context, userID int64) (GetLastPaidPackageByUserRow, error) {
+	row := q.db.QueryRow(ctx, getLastPaidPackageByUser, userID)
+	var i GetLastPaidPackageByUserRow
+	err := row.Scan(
+		&i.Code,
+		&i.Title,
+		&i.PriceRub,
+		&i.Currency,
+		&i.PaidAt,
+	)
+	return i, err
+}
+
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at FROM users WHERE id = $1
+SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, is_banned, banned_at, banned_reason, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
@@ -73,6 +156,9 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.LangCode,
 		&i.Email,
 		&i.IsAdmin,
+		&i.IsBanned,
+		&i.BannedAt,
+		&i.BannedReason,
 		&i.MediaAgreed,
 		&i.TextBalance,
 		&i.ImageBalance,
@@ -84,7 +170,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 }
 
 const getUserByTGID = `-- name: GetUserByTGID :one
-SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at FROM users WHERE tg_id = $1
+SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, is_banned, banned_at, banned_reason, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at FROM users WHERE tg_id = $1
 `
 
 func (q *Queries) GetUserByTGID(ctx context.Context, tgID int64) (User, error) {
@@ -99,6 +185,9 @@ func (q *Queries) GetUserByTGID(ctx context.Context, tgID int64) (User, error) {
 		&i.LangCode,
 		&i.Email,
 		&i.IsAdmin,
+		&i.IsBanned,
+		&i.BannedAt,
+		&i.BannedReason,
 		&i.MediaAgreed,
 		&i.TextBalance,
 		&i.ImageBalance,
@@ -109,13 +198,123 @@ func (q *Queries) GetUserByTGID(ctx context.Context, tgID int64) (User, error) {
 	return i, err
 }
 
-const setMediaAgreed = `-- name: SetMediaAgreed :exec
-UPDATE users SET media_agreed = true, updated_at = now() WHERE id = $1
+const searchUsersByUsername = `-- name: SearchUsersByUsername :many
+SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, is_banned, banned_at, banned_reason, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at
+FROM users
+WHERE username ILIKE $1
+ORDER BY id DESC
+LIMIT $2
 `
 
-func (q *Queries) SetMediaAgreed(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, setMediaAgreed, id)
-	return err
+type SearchUsersByUsernameParams struct {
+	Username pgtype.Text `json:"username"`
+	Limit    int32       `json:"limit"`
+}
+
+func (q *Queries) SearchUsersByUsername(ctx context.Context, arg SearchUsersByUsernameParams) ([]User, error) {
+	rows, err := q.db.Query(ctx, searchUsersByUsername, arg.Username, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.TgID,
+			&i.Username,
+			&i.FirstName,
+			&i.LastName,
+			&i.LangCode,
+			&i.Email,
+			&i.IsAdmin,
+			&i.IsBanned,
+			&i.BannedAt,
+			&i.BannedReason,
+			&i.MediaAgreed,
+			&i.TextBalance,
+			&i.ImageBalance,
+			&i.VideoBalance,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setUserBanStatus = `-- name: SetUserBanStatus :execrows
+UPDATE users
+SET is_banned = $2,
+    banned_reason = CASE WHEN $2 THEN $3 ELSE NULL END,
+    banned_at = CASE WHEN $2 THEN now() ELSE NULL END,
+    updated_at = now()
+WHERE id = $1
+`
+
+type SetUserBanStatusParams struct {
+	ID           int64       `json:"id"`
+	IsBanned     bool        `json:"is_banned"`
+	BannedReason pgtype.Text `json:"banned_reason"`
+}
+
+func (q *Queries) SetUserBanStatus(ctx context.Context, arg SetUserBanStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setUserBanStatus, arg.ID, arg.IsBanned, arg.BannedReason)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const topUsersByGenerationCount = `-- name: TopUsersByGenerationCount :many
+SELECT
+  u.id,
+  u.tg_id,
+  u.username,
+  COUNT(gr.id)::bigint AS gen_count
+FROM users u
+JOIN generation_requests gr ON gr.user_id = u.id
+GROUP BY u.id, u.tg_id, u.username
+ORDER BY gen_count DESC
+LIMIT $1
+`
+
+type TopUsersByGenerationCountRow struct {
+	ID       int64       `json:"id"`
+	TgID     int64       `json:"tg_id"`
+	Username pgtype.Text `json:"username"`
+	GenCount int64       `json:"gen_count"`
+}
+
+func (q *Queries) TopUsersByGenerationCount(ctx context.Context, limit int32) ([]TopUsersByGenerationCountRow, error) {
+	rows, err := q.db.Query(ctx, topUsersByGenerationCount, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TopUsersByGenerationCountRow
+	for rows.Next() {
+		var i TopUsersByGenerationCountRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TgID,
+			&i.Username,
+			&i.GenCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const upsertUserByTGID = `-- name: UpsertUserByTGID :one
@@ -127,7 +326,7 @@ ON CONFLICT (tg_id) DO UPDATE SET
     last_name = EXCLUDED.last_name,
     lang_code = EXCLUDED.lang_code,
     updated_at = now()
-RETURNING id, tg_id, username, first_name, last_name, lang_code, email, is_admin, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at
+RETURNING id, tg_id, username, first_name, last_name, lang_code, email, is_admin, is_banned, banned_at, banned_reason, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at
 `
 
 type UpsertUserByTGIDParams struct {
@@ -156,6 +355,9 @@ func (q *Queries) UpsertUserByTGID(ctx context.Context, arg UpsertUserByTGIDPara
 		&i.LangCode,
 		&i.Email,
 		&i.IsAdmin,
+		&i.IsBanned,
+		&i.BannedAt,
+		&i.BannedReason,
 		&i.MediaAgreed,
 		&i.TextBalance,
 		&i.ImageBalance,

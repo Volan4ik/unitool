@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS users (
   lang_code      text,
   email          citext,
   is_admin       boolean NOT NULL DEFAULT false,
+  is_banned      boolean NOT NULL DEFAULT false,
+  banned_at      timestamptz,
+  banned_reason  text,
   media_agreed   boolean NOT NULL DEFAULT false,
   text_balance   integer NOT NULL DEFAULT 0 CHECK (text_balance >= 0),
   image_balance  integer NOT NULL DEFAULT 0 CHECK (image_balance >= 0),
@@ -58,6 +61,7 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
 CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users(is_admin);
+CREATE INDEX IF NOT EXISTS idx_users_is_banned ON users(is_banned);
 
 DROP TRIGGER IF EXISTS trg_users_set_updated ON users;
 CREATE TRIGGER trg_users_set_updated
@@ -69,6 +73,7 @@ CREATE TABLE IF NOT EXISTS packages (
   code            text UNIQUE NOT NULL,
   title           text NOT NULL,
   price_rub       integer NOT NULL CHECK (price_rub >= 0),
+  currency        text NOT NULL DEFAULT 'RUB' CHECK (char_length(currency) = 3),
   text_credits    integer NOT NULL DEFAULT 0 CHECK (text_credits >= 0),
   image_credits   integer NOT NULL DEFAULT 0 CHECK (image_credits >= 0),
   video_credits   integer NOT NULL DEFAULT 0 CHECK (video_credits >= 0),
@@ -102,6 +107,23 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_provider_charge ON orders(provider_payment_charge_id);
+
+CREATE TABLE IF NOT EXISTS telegram_updates (
+  update_id              BIGINT PRIMARY KEY,
+  status                 text NOT NULL DEFAULT 'processing',
+  attempt_count          integer NOT NULL DEFAULT 1 CHECK (attempt_count > 0),
+  processing_started_at  timestamptz NOT NULL DEFAULT now(),
+  done_at                timestamptz,
+  last_error             text,
+  created_at             timestamptz NOT NULL DEFAULT now(),
+  updated_at             timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT telegram_updates_status_check
+    CHECK (status IN ('processing', 'done', 'failed'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_telegram_updates_created_at ON telegram_updates(created_at);
+CREATE INDEX IF NOT EXISTS idx_telegram_updates_status_processing
+  ON telegram_updates(status, processing_started_at);
 
 CREATE TABLE IF NOT EXISTS credit_ledger (
   id             BIGSERIAL PRIMARY KEY,

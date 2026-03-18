@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"unitool/internal/storage"
@@ -16,6 +17,10 @@ type Server struct {
 	pg   *storage.PG
 	mux  *http.ServeMux
 	srv  *http.Server
+	wg   sync.WaitGroup
+
+	shutdownOnce sync.Once
+	shutdownErr  error
 }
 
 func New(addr string, pg *storage.PG) *Server {
@@ -61,18 +66,33 @@ func (s *Server) Start(ctx context.Context) {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	s.wg.Add(1)
 	go func() {
-		<-ctx.Done()
-		shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.srv.Shutdown(shCtx); err != nil {
-			log.Printf("health server shutdown error: %v", err)
-		}
-	}()
-
-	go func() {
+		defer s.wg.Done()
 		if err := s.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("health server stopped: %v", err)
 		}
 	}()
+	go func() {
+		<-ctx.Done()
+		shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.Shutdown(shCtx); err != nil {
+			log.Printf("health server shutdown error: %v", err)
+		}
+	}()
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.shutdownOnce.Do(func() {
+		if s.srv == nil {
+			return
+		}
+		s.shutdownErr = s.srv.Shutdown(ctx)
+	})
+	return s.shutdownErr
+}
+
+func (s *Server) Wait() {
+	s.wg.Wait()
 }

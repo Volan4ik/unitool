@@ -24,18 +24,3 @@ SET status = $2::gen_request_status,
     latency_ms = $4,
     finished_at = now()
 WHERE id = $1;
-
--- name: CountByProviderModel :many
-SELECT provider, model, kind, COUNT(*) AS cnt
-FROM generation_requests
-WHERE created_at >= $1 AND created_at < $2
-GROUP BY provider, model, kind
-ORDER BY cnt DESC
-LIMIT $3;
-
--- name: DailyUsageByKind :many
-SELECT date_trunc('day', created_at) AS day, kind, COUNT(*) AS cnt
-FROM generation_requests
-WHERE created_at >= $1 AND created_at < $2
-GROUP BY day, kind
-ORDER BY day ASC;

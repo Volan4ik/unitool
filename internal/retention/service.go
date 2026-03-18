@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"unitool/internal/storage"
@@ -16,9 +17,15 @@ type Service struct {
 	keepChatDays    int
 	keepLedgerDays  int
 	keepRequestDays int
+	keepUpdatesDays int
+	wg              sync.WaitGroup
 }
 
-func NewService(pg *storage.PG, atHHMMUTC string, keepChatDays, keepLedgerDays, keepRequestDays int) *Service {
+func NewService(
+	pg *storage.PG,
+	atHHMMUTC string,
+	keepChatDays, keepLedgerDays, keepRequestDays, keepUpdatesDays int,
+) *Service {
 	if atHHMMUTC == "" {
 		atHHMMUTC = "04:10"
 	}
@@ -31,22 +38,44 @@ func NewService(pg *storage.PG, atHHMMUTC string, keepChatDays, keepLedgerDays, 
 	if keepRequestDays <= 0 {
 		keepRequestDays = 365
 	}
+	if keepUpdatesDays <= 0 {
+		keepUpdatesDays = 30
+	}
 	return &Service{
 		pg:              pg,
 		atHHMMUTC:       atHHMMUTC,
 		keepChatDays:    keepChatDays,
 		keepLedgerDays:  keepLedgerDays,
 		keepRequestDays: keepRequestDays,
+		keepUpdatesDays: keepUpdatesDays,
 	}
 }
 
 func (s *Service) Start(ctx context.Context) {
+	s.wg.Add(1)
 	go func() {
-		if err := s.run(context.Background()); err != nil {
+		defer s.wg.Done()
+		runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		if err := s.run(runCtx); err != nil {
 			log.Printf("retention: initial run failed: %v", err)
 		}
+		cancel()
 		s.loop(ctx)
 	}()
+}
+
+func (s *Service) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Service) loop(ctx context.Context) {
@@ -66,9 +95,11 @@ func (s *Service) loop(ctx context.Context) {
 			timer.Stop()
 			return
 		case <-timer.C:
-			if err := s.run(context.Background()); err != nil {
+			runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			if err := s.run(runCtx); err != nil {
 				log.Printf("retention: run failed: %v", err)
 			}
+			cancel()
 		}
 	}
 }
@@ -92,15 +123,27 @@ FROM run_retention_cleanup(
 	).Scan(&chatDeleted, &ledgerDeleted, &reqDeleted); err != nil {
 		return err
 	}
+	tag, err := s.pg.Pool.Exec(
+		ctx,
+		`DELETE FROM telegram_updates
+		  WHERE created_at < now() - ($1::int || ' days')::interval`,
+		s.keepUpdatesDays,
+	)
+	if err != nil {
+		return err
+	}
+	updatesDeleted := tag.RowsAffected()
 
 	log.Printf(
-		"retention: ok chat=%d ledger=%d requests=%d (keep chat=%dd ledger=%dd requests=%dd)",
+		"retention: ok chat=%d ledger=%d requests=%d updates=%d (keep chat=%dd ledger=%dd requests=%dd updates=%dd)",
 		chatDeleted,
 		ledgerDeleted,
 		reqDeleted,
+		updatesDeleted,
 		s.keepChatDays,
 		s.keepLedgerDays,
 		s.keepRequestDays,
+		s.keepUpdatesDays,
 	)
 	return nil
 }
@@ -123,7 +166,7 @@ func nextDailyRunUTC(now time.Time, hhmm string) (time.Time, error) {
 
 func (s *Service) String() string {
 	return fmt.Sprintf(
-		"retention(at=%s, chat=%d, ledger=%d, requests=%d)",
-		s.atHHMMUTC, s.keepChatDays, s.keepLedgerDays, s.keepRequestDays,
+		"retention(at=%s, chat=%d, ledger=%d, requests=%d, updates=%d)",
+		s.atHHMMUTC, s.keepChatDays, s.keepLedgerDays, s.keepRequestDays, s.keepUpdatesDays,
 	)
 }

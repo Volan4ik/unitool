@@ -118,80 +118,19 @@ func (q *Queries) GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByI
 	return i, err
 }
 
-const listUserOrders = `-- name: ListUserOrders :many
-SELECT id, user_id, package_id, amount_rub, currency,
-       status::text AS status,
-       tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
-       buyer_email, provider_data, created_at, paid_at
-FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2::int OFFSET $3::int
-`
-
-type ListUserOrdersParams struct {
-	UserID  int64 `json:"user_id"`
-	Column2 int32 `json:"column_2"`
-	Column3 int32 `json:"column_3"`
-}
-
-type ListUserOrdersRow struct {
-	ID                      pgtype.UUID        `json:"id"`
-	UserID                  int64              `json:"user_id"`
-	PackageID               int64              `json:"package_id"`
-	AmountRub               int32              `json:"amount_rub"`
-	Currency                string             `json:"currency"`
-	Status                  string             `json:"status"`
-	TgInvoiceMsgID          pgtype.Int8        `json:"tg_invoice_msg_id"`
-	TgPaymentChargeID       pgtype.Text        `json:"tg_payment_charge_id"`
-	ProviderPaymentChargeID pgtype.Text        `json:"provider_payment_charge_id"`
-	BuyerEmail              pgtype.Text        `json:"buyer_email"`
-	ProviderData            []byte             `json:"provider_data"`
-	CreatedAt               pgtype.Timestamptz `json:"created_at"`
-	PaidAt                  pgtype.Timestamptz `json:"paid_at"`
-}
-
-func (q *Queries) ListUserOrders(ctx context.Context, arg ListUserOrdersParams) ([]ListUserOrdersRow, error) {
-	rows, err := q.db.Query(ctx, listUserOrders, arg.UserID, arg.Column2, arg.Column3)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListUserOrdersRow
-	for rows.Next() {
-		var i ListUserOrdersRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.PackageID,
-			&i.AmountRub,
-			&i.Currency,
-			&i.Status,
-			&i.TgInvoiceMsgID,
-			&i.TgPaymentChargeID,
-			&i.ProviderPaymentChargeID,
-			&i.BuyerEmail,
-			&i.ProviderData,
-			&i.CreatedAt,
-			&i.PaidAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const markOrderFailed = `-- name: MarkOrderFailed :exec
+const markOrderFailed = `-- name: MarkOrderFailed :execrows
 UPDATE orders
 SET status='failed'
 WHERE id=$1
   AND status IN ('created','precheckout_ok')
 `
 
-func (q *Queries) MarkOrderFailed(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, markOrderFailed, id)
-	return err
+func (q *Queries) MarkOrderFailed(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markOrderFailed, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const markOrderPaid = `-- name: MarkOrderPaid :one
@@ -224,26 +163,17 @@ func (q *Queries) MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (p
 	return id, err
 }
 
-const markOrderPrecheckout = `-- name: MarkOrderPrecheckout :exec
+const markOrderPrecheckout = `-- name: MarkOrderPrecheckout :execrows
 UPDATE orders
 SET status='precheckout_ok'
 WHERE id=$1
   AND status='created'
 `
 
-func (q *Queries) MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, markOrderPrecheckout, id)
-	return err
-}
-
-const markOrderRefunded = `-- name: MarkOrderRefunded :exec
-UPDATE orders
-SET status='refunded'
-WHERE id=$1
-  AND status='paid'
-`
-
-func (q *Queries) MarkOrderRefunded(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, markOrderRefunded, id)
-	return err
+func (q *Queries) MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markOrderPrecheckout, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

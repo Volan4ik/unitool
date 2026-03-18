@@ -115,6 +115,25 @@ func (q *Queries) EnqueueGenerationJob(ctx context.Context, arg EnqueueGeneratio
 	return i, err
 }
 
+const failStaleRunningJobs = `-- name: FailStaleRunningJobs :execrows
+UPDATE generation_jobs
+SET status = 'failed',
+    error_message = 'stale running job exhausted attempts',
+    finished_at = now(),
+    updated_at = now()
+WHERE status = 'running'
+  AND updated_at < now() - ($1::int * interval '1 second')
+  AND attempts >= max_attempts
+`
+
+func (q *Queries) FailStaleRunningJobs(ctx context.Context, dollar_1 int32) (int64, error) {
+	result, err := q.db.Exec(ctx, failStaleRunningJobs, dollar_1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markGenerationJobDone = `-- name: MarkGenerationJobDone :one
 UPDATE generation_jobs
 SET status = 'done',
@@ -176,4 +195,23 @@ type RequeueGenerationJobParams struct {
 func (q *Queries) RequeueGenerationJob(ctx context.Context, arg RequeueGenerationJobParams) error {
 	_, err := q.db.Exec(ctx, requeueGenerationJob, arg.ID, arg.ErrorMessage, arg.NextAttemptAt)
 	return err
+}
+
+const requeueStaleRunningJobs = `-- name: RequeueStaleRunningJobs :execrows
+UPDATE generation_jobs
+SET status = 'queued',
+    error_message = 'stale running job reclaimed',
+    next_attempt_at = now(),
+    updated_at = now()
+WHERE status = 'running'
+  AND updated_at < now() - ($1::int * interval '1 second')
+  AND attempts < max_attempts
+`
+
+func (q *Queries) RequeueStaleRunningJobs(ctx context.Context, dollar_1 int32) (int64, error) {
+	result, err := q.db.Exec(ctx, requeueStaleRunningJobs, dollar_1)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

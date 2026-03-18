@@ -52,3 +52,23 @@ SET status = 'queued',
     next_attempt_at = $3,
     updated_at = now()
 WHERE id = $1;
+
+-- name: RequeueStaleRunningJobs :execrows
+UPDATE generation_jobs
+SET status = 'queued',
+    error_message = 'stale running job reclaimed',
+    next_attempt_at = now(),
+    updated_at = now()
+WHERE status = 'running'
+  AND updated_at < now() - ($1::int * interval '1 second')
+  AND attempts < max_attempts;
+
+-- name: FailStaleRunningJobs :execrows
+UPDATE generation_jobs
+SET status = 'failed',
+    error_message = 'stale running job exhausted attempts',
+    finished_at = now(),
+    updated_at = now()
+WHERE status = 'running'
+  AND updated_at < now() - ($1::int * interval '1 second')
+  AND attempts >= max_attempts;

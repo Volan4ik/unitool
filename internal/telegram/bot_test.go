@@ -69,29 +69,3 @@ func TestSetWebhookSendsSecretToken(t *testing.T) {
 		t.Fatalf("unexpected secret token: %q", got)
 	}
 }
-
-func TestDeleteWebhookSendsDropPending(t *testing.T) {
-	fc := &fakeTGClient{}
-	api, err := tgbotapi.NewBotAPIWithClient(
-		"TEST_TOKEN",
-		"https://fake.telegram.local/bot%s/%s",
-		fc,
-	)
-	if err != nil {
-		t.Fatalf("new bot api: %v", err)
-	}
-	b := &Bot{API: api}
-
-	if err := b.DeleteWebhook(); err != nil {
-		t.Fatalf("delete webhook: %v", err)
-	}
-
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-	if fc.lastMethod != "deleteWebhook" {
-		t.Fatalf("expected method deleteWebhook, got %s", fc.lastMethod)
-	}
-	if got := fc.lastForm.Get("drop_pending_updates"); got != "true" {
-		t.Fatalf("expected drop_pending_updates=true, got %q", got)
-	}
-}

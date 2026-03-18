@@ -27,8 +27,3 @@ func (b *Bot) SetWebhook(url, secretToken string) error {
 	_, err := b.API.MakeRequest("setWebhook", p)
 	return err
 }
-
-func (b *Bot) DeleteWebhook() error {
-	_, err := b.API.Request(tgbotapi.DeleteWebhookConfig{DropPendingUpdates: true})
-	return err
-}

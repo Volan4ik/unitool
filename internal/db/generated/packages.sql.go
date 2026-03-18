@@ -10,19 +10,20 @@ import (
 )
 
 const createPackage = `-- name: CreatePackage :one
-INSERT INTO packages (code, title, price_rub, text_credits, image_credits, video_credits, is_active)
-VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,TRUE))
-RETURNING id, code, title, price_rub, text_credits, image_credits, video_credits, is_active, created_at, updated_at
+INSERT INTO packages (code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+RETURNING id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at
 `
 
 type CreatePackageParams struct {
-	Code         string      `json:"code"`
-	Title        string      `json:"title"`
-	PriceRub     int32       `json:"price_rub"`
-	TextCredits  int32       `json:"text_credits"`
-	ImageCredits int32       `json:"image_credits"`
-	VideoCredits int32       `json:"video_credits"`
-	Column7      interface{} `json:"column_7"`
+	Code         string `json:"code"`
+	Title        string `json:"title"`
+	PriceRub     int32  `json:"price_rub"`
+	Currency     string `json:"currency"`
+	TextCredits  int32  `json:"text_credits"`
+	ImageCredits int32  `json:"image_credits"`
+	VideoCredits int32  `json:"video_credits"`
+	IsActive     bool   `json:"is_active"`
 }
 
 func (q *Queries) CreatePackage(ctx context.Context, arg CreatePackageParams) (Package, error) {
@@ -30,10 +31,11 @@ func (q *Queries) CreatePackage(ctx context.Context, arg CreatePackageParams) (P
 		arg.Code,
 		arg.Title,
 		arg.PriceRub,
+		arg.Currency,
 		arg.TextCredits,
 		arg.ImageCredits,
 		arg.VideoCredits,
-		arg.Column7,
+		arg.IsActive,
 	)
 	var i Package
 	err := row.Scan(
@@ -41,6 +43,7 @@ func (q *Queries) CreatePackage(ctx context.Context, arg CreatePackageParams) (P
 		&i.Code,
 		&i.Title,
 		&i.PriceRub,
+		&i.Currency,
 		&i.TextCredits,
 		&i.ImageCredits,
 		&i.VideoCredits,
@@ -51,17 +54,21 @@ func (q *Queries) CreatePackage(ctx context.Context, arg CreatePackageParams) (P
 	return i, err
 }
 
-const deactivatePackage = `-- name: DeactivatePackage :exec
-UPDATE packages SET is_active = FALSE, updated_at = now() WHERE id = $1
+const deletePackage = `-- name: DeletePackage :execrows
+DELETE FROM packages
+WHERE id = $1
 `
 
-func (q *Queries) DeactivatePackage(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, deactivatePackage, id)
-	return err
+func (q *Queries) DeletePackage(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePackage, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getPackageByCode = `-- name: GetPackageByCode :one
-SELECT id, code, title, price_rub, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE code = $1
+SELECT id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE code = $1
 `
 
 func (q *Queries) GetPackageByCode(ctx context.Context, code string) (Package, error) {
@@ -72,6 +79,7 @@ func (q *Queries) GetPackageByCode(ctx context.Context, code string) (Package, e
 		&i.Code,
 		&i.Title,
 		&i.PriceRub,
+		&i.Currency,
 		&i.TextCredits,
 		&i.ImageCredits,
 		&i.VideoCredits,
@@ -83,7 +91,7 @@ func (q *Queries) GetPackageByCode(ctx context.Context, code string) (Package, e
 }
 
 const getPackageByID = `-- name: GetPackageByID :one
-SELECT id, code, title, price_rub, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE id = $1
+SELECT id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE id = $1
 `
 
 func (q *Queries) GetPackageByID(ctx context.Context, id int64) (Package, error) {
@@ -94,6 +102,7 @@ func (q *Queries) GetPackageByID(ctx context.Context, id int64) (Package, error)
 		&i.Code,
 		&i.Title,
 		&i.PriceRub,
+		&i.Currency,
 		&i.TextCredits,
 		&i.ImageCredits,
 		&i.VideoCredits,
@@ -105,7 +114,7 @@ func (q *Queries) GetPackageByID(ctx context.Context, id int64) (Package, error)
 }
 
 const listActivePackages = `-- name: ListActivePackages :many
-SELECT id, code, title, price_rub, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE is_active = TRUE ORDER BY price_rub ASC
+SELECT id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE is_active = TRUE ORDER BY price_rub ASC
 `
 
 func (q *Queries) ListActivePackages(ctx context.Context) ([]Package, error) {
@@ -122,6 +131,7 @@ func (q *Queries) ListActivePackages(ctx context.Context) ([]Package, error) {
 			&i.Code,
 			&i.Title,
 			&i.PriceRub,
+			&i.Currency,
 			&i.TextCredits,
 			&i.ImageCredits,
 			&i.VideoCredits,
@@ -139,23 +149,83 @@ func (q *Queries) ListActivePackages(ctx context.Context) ([]Package, error) {
 	return items, nil
 }
 
-const updatePackage = `-- name: UpdatePackage :one
+const listPackages = `-- name: ListPackages :many
+SELECT id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages ORDER BY id ASC
+`
+
+func (q *Queries) ListPackages(ctx context.Context) ([]Package, error) {
+	rows, err := q.db.Query(ctx, listPackages)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Package
+	for rows.Next() {
+		var i Package
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Title,
+			&i.PriceRub,
+			&i.Currency,
+			&i.TextCredits,
+			&i.ImageCredits,
+			&i.VideoCredits,
+			&i.IsActive,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setPackageActive = `-- name: SetPackageActive :execrows
 UPDATE packages
-SET title = COALESCE($2, title),
-    price_rub = COALESCE($3, price_rub),
-    text_credits = COALESCE($4, text_credits),
-    image_credits = COALESCE($5, image_credits),
-    video_credits = COALESCE($6, video_credits),
-    is_active = COALESCE($7, is_active),
+SET is_active = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, code, title, price_rub, text_credits, image_credits, video_credits, is_active, created_at, updated_at
+`
+
+type SetPackageActiveParams struct {
+	ID       int64 `json:"id"`
+	IsActive bool  `json:"is_active"`
+}
+
+func (q *Queries) SetPackageActive(ctx context.Context, arg SetPackageActiveParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setPackageActive, arg.ID, arg.IsActive)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updatePackage = `-- name: UpdatePackage :one
+UPDATE packages
+SET code = $2,
+    title = $3,
+    price_rub = $4,
+    currency = $5,
+    text_credits = $6,
+    image_credits = $7,
+    video_credits = $8,
+    is_active = $9,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at
 `
 
 type UpdatePackageParams struct {
 	ID           int64  `json:"id"`
+	Code         string `json:"code"`
 	Title        string `json:"title"`
 	PriceRub     int32  `json:"price_rub"`
+	Currency     string `json:"currency"`
 	TextCredits  int32  `json:"text_credits"`
 	ImageCredits int32  `json:"image_credits"`
 	VideoCredits int32  `json:"video_credits"`
@@ -165,8 +235,10 @@ type UpdatePackageParams struct {
 func (q *Queries) UpdatePackage(ctx context.Context, arg UpdatePackageParams) (Package, error) {
 	row := q.db.QueryRow(ctx, updatePackage,
 		arg.ID,
+		arg.Code,
 		arg.Title,
 		arg.PriceRub,
+		arg.Currency,
 		arg.TextCredits,
 		arg.ImageCredits,
 		arg.VideoCredits,
@@ -178,6 +250,7 @@ func (q *Queries) UpdatePackage(ctx context.Context, arg UpdatePackageParams) (P
 		&i.Code,
 		&i.Title,
 		&i.PriceRub,
+		&i.Currency,
 		&i.TextCredits,
 		&i.ImageCredits,
 		&i.VideoCredits,
