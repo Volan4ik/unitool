@@ -35,6 +35,7 @@ const (
 	mediaSendAttempts     = 3
 	mediaSendBaseBackoff  = 700 * time.Millisecond
 	maxProviderOutputSize = 512
+	staleFailReason       = "stale running job exhausted attempts"
 )
 
 func NewService(bot *tgbotapi.BotAPI, q *db.Queries, prov provider.ModelProvider, workers int, pollEvery, genTimeout time.Duration) *Service {
@@ -157,8 +158,22 @@ func (s *Service) recoverStaleRunningJobs(ctx context.Context) {
 		log.Printf("generation: fail stale running jobs failed: %v", err)
 		return
 	}
-	if requeued > 0 || failed > 0 {
-		log.Printf("generation: recovered stale jobs requeued=%d failed=%d stale_after_sec=%d", requeued, failed, staleSeconds)
+	for _, item := range failed {
+		s.finalizeFailedSideEffects(
+			ctx,
+			item.ID,
+			item.GenerationRequestID,
+			item.UserID,
+			item.ChatID,
+			item.Kind,
+			staleFailReason,
+			0,
+			"stale_recovery",
+			true,
+		)
+	}
+	if requeued > 0 || len(failed) > 0 {
+		log.Printf("generation: recovered stale jobs requeued=%d failed=%d stale_after_sec=%d", requeued, len(failed), staleSeconds)
 	}
 }
 
@@ -184,35 +199,6 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 		job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output),
 	)
 
-	// Finalize generation request metrics/cost.
-	var cImg, cVid pgtype.Int4
-	switch job.Kind {
-	case "image":
-		cImg = pgtype.Int4{Int32: 1, Valid: true}
-	case "video":
-		cVid = pgtype.Int4{Int32: 1, Valid: true}
-	}
-	_ = s.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
-		ID:               job.GenerationRequestID,
-		OutputTokens:     pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
-		LatencyMs:        pgtype.Int4{Int32: latency, Valid: true},
-		CostCreditsText:  pgtype.Int4{},
-		CostCreditsImage: cImg,
-		CostCreditsVideo: cVid,
-	})
-	_, _ = s.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
-		UserID:              job.UserID,
-		ConversationID:      job.ConversationID,
-		Kind:                job.Kind,
-		Role:                "assistant",
-		ContentText:         pgtype.Text{String: resp.Output, Valid: true},
-		AttachmentUrl:       pgtype.Text{},
-		Provider:            pgtype.Text{String: job.Provider, Valid: true},
-		Model:               pgtype.Text{String: job.Model, Valid: true},
-		InputTokens:         pgtype.Int4{},
-		OutputTokens:        pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
-		GenerationRequestID: pgtype.Int8{Int64: job.GenerationRequestID, Valid: true},
-	})
 	if _, err := s.Q.MarkGenerationJobDone(ctx, db.MarkGenerationJobDoneParams{
 		ID:         job.ID,
 		ResultText: pgtype.Text{String: output, Valid: output != ""},
@@ -231,6 +217,53 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 		return
 	}
 
+	// Finalize generation request metrics/cost only for terminally-claimed runner.
+	var cImg, cVid pgtype.Int4
+	switch job.Kind {
+	case "image":
+		cImg = pgtype.Int4{Int32: 1, Valid: true}
+	case "video":
+		cVid = pgtype.Int4{Int32: 1, Valid: true}
+	}
+	reqRows, err := s.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
+		ID:               job.GenerationRequestID,
+		OutputTokens:     pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
+		LatencyMs:        pgtype.Int4{Int32: latency, Valid: true},
+		CostCreditsText:  pgtype.Int4{},
+		CostCreditsImage: cImg,
+		CostCreditsVideo: cVid,
+	})
+	if err != nil {
+		log.Printf(
+			"generation: finish request failed job_id=%d gen_id=%d kind=%s err=%v",
+			job.ID, job.GenerationRequestID, job.Kind, err,
+		)
+	} else if reqRows == 0 {
+		log.Printf(
+			"generation: finish request skipped terminal-state job_id=%d gen_id=%d kind=%s",
+			job.ID, job.GenerationRequestID, job.Kind,
+		)
+	}
+
+	if _, err := s.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
+		UserID:              job.UserID,
+		ConversationID:      job.ConversationID,
+		Kind:                job.Kind,
+		Role:                "assistant",
+		ContentText:         pgtype.Text{String: resp.Output, Valid: true},
+		AttachmentUrl:       pgtype.Text{},
+		Provider:            pgtype.Text{String: job.Provider, Valid: true},
+		Model:               pgtype.Text{String: job.Model, Valid: true},
+		InputTokens:         pgtype.Int4{},
+		OutputTokens:        pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
+		GenerationRequestID: pgtype.Int8{Int64: job.GenerationRequestID, Valid: true},
+	}); err != nil {
+		log.Printf(
+			"generation: insert assistant message failed job_id=%d gen_id=%d kind=%s err=%v",
+			job.ID, job.GenerationRequestID, job.Kind, err,
+		)
+	}
+
 	s.sendMediaResult(ctx, job, output)
 }
 
@@ -241,7 +274,7 @@ func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob,
 		if backoff < time.Second {
 			backoff = time.Second
 		}
-		_ = s.Q.RequeueGenerationJob(ctx, db.RequeueGenerationJobParams{
+		rows, err := s.Q.RequeueGenerationJob(ctx, db.RequeueGenerationJobParams{
 			ID:           job.ID,
 			ErrorMessage: pgtype.Text{String: errText, Valid: true},
 			NextAttemptAt: pgtype.Timestamptz{
@@ -249,39 +282,118 @@ func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob,
 				Valid: true,
 			},
 		})
+		if err != nil {
+			log.Printf(
+				"generation: requeue failed job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d/%d err=%q requeue_err=%v",
+				job.ID, job.UserID, job.ChatID, job.Kind, job.Attempts, job.MaxAttempts, errText, err,
+			)
+			// Safe fallback: finalize as permanent failure for this running claim.
+			s.finalizeFailedAttempt(ctx, job, errText, latency)
+			return
+		}
+		if rows == 0 {
+			log.Printf(
+				"generation: requeue skipped stale runner job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d/%d err=%q",
+				job.ID, job.UserID, job.ChatID, job.Kind, job.Attempts, job.MaxAttempts, errText,
+			)
+			return
+		}
 		log.Printf(
-			"generation: requeued job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d/%d err=%q",
+			"generation: requeue success job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d/%d err=%q",
 			job.ID, job.UserID, job.ChatID, job.Kind, job.Attempts, job.MaxAttempts, errText,
 		)
 		return
 	}
 
-	_ = s.Q.MarkGenerationJobFailed(ctx, db.MarkGenerationJobFailedParams{
+	s.finalizeFailedAttempt(ctx, job, errText, latency)
+}
+
+func (s *Service) finalizeFailedAttempt(ctx context.Context, job db.GenerationJob, errText string, latency int32) {
+	rows, err := s.Q.MarkGenerationJobFailed(ctx, db.MarkGenerationJobFailedParams{
 		ID:           job.ID,
 		ErrorMessage: pgtype.Text{String: errText, Valid: true},
 	})
-	_ = s.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
-		ID:           job.GenerationRequestID,
+	if err != nil {
+		log.Printf(
+			"generation: mark failed transition error job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
+			job.ID, job.UserID, job.ChatID, job.Kind, err,
+		)
+		return
+	}
+	if rows == 0 {
+		log.Printf(
+			"generation: stale runner skip finalization job_id=%d user_id=%d chat_id=%d kind=%s err=%q",
+			job.ID, job.UserID, job.ChatID, job.Kind, errText,
+		)
+		return
+	}
+
+	s.finalizeFailedSideEffects(ctx, job.ID, job.GenerationRequestID, job.UserID, job.ChatID, job.Kind, errText, latency, "async_generation_failed", true)
+}
+
+func (s *Service) finalizeFailedSideEffects(
+	ctx context.Context,
+	jobID int64,
+	genID int64,
+	userID int64,
+	chatID int64,
+	kind string,
+	errText string,
+	latency int32,
+	source string,
+	notifyUser bool,
+) {
+	rows, err := s.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
+		ID:           genID,
 		Column2:      "failed",
 		ErrorMessage: pgtype.Text{String: errText, Valid: true},
 		LatencyMs:    pgtype.Int4{Int32: latency, Valid: true},
 	})
+	if err != nil {
+		log.Printf(
+			"generation: fail generation request write failed job_id=%d gen_id=%d source=%s err=%v",
+			jobID, genID, source, err,
+		)
+		return
+	}
+	if rows == 0 {
+		log.Printf(
+			"generation: fail generation request skipped terminal-state job_id=%d gen_id=%d source=%s",
+			jobID, genID, source,
+		)
+		return
+	}
 
+	opKey := fmt.Sprintf("refund:job:%d", jobID)
 	meta, _ := json.Marshal(map[string]any{
-		"job_id": job.ID,
-		"gen_id": job.GenerationRequestID,
-		"source": "async_generation_failed",
+		"job_id": jobID,
+		"gen_id": genID,
+		"source": source,
 		"err":    errText,
 	})
-	_ = s.refundOneCredit(ctx, job.UserID, job.Kind, meta, fmt.Sprintf("refund:job:%d", job.ID))
-	log.Printf(
-		"generation: failed permanently job_id=%d user_id=%d chat_id=%d kind=%s err=%q",
-		job.ID, job.UserID, job.ChatID, job.Kind, errText,
-	)
-	if err := s.sendText(job.ChatID, "Ошибка генерации медиа. Попытка возвращена."); err != nil {
+	refundErr := s.refundOneCredit(ctx, userID, kind, meta, opKey)
+	if refundErr != nil {
 		log.Printf(
-			"generation: send failure notice failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
-			job.ID, job.UserID, job.ChatID, job.Kind, err,
+			"generation: refund failed job_id=%d gen_id=%d user_id=%d kind=%s source=%s op_key=%s err=%v reconcile_required=true",
+			jobID, genID, userID, kind, source, opKey, refundErr,
+		)
+	}
+	log.Printf(
+		"generation: failed permanently job_id=%d gen_id=%d user_id=%d chat_id=%d kind=%s source=%s refunded=%t err=%q",
+		jobID, genID, userID, chatID, kind, source, refundErr == nil, errText,
+	)
+
+	if !notifyUser {
+		return
+	}
+	msg := "Ошибка генерации медиа. Попытка возвращена."
+	if refundErr != nil {
+		msg = "Ошибка генерации медиа. Возврат попытки в обработке, попробуйте позже."
+	}
+	if err := s.sendText(chatID, msg); err != nil {
+		log.Printf(
+			"generation: send failure notice failed job_id=%d gen_id=%d user_id=%d chat_id=%d kind=%s source=%s err=%v",
+			jobID, genID, userID, chatID, kind, source, err,
 		)
 	}
 }

@@ -11,13 +11,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const failGenerationRequest = `-- name: FailGenerationRequest :exec
+const failGenerationRequest = `-- name: FailGenerationRequest :execrows
 UPDATE generation_requests
 SET status = $2::gen_request_status,
     error_message = $3,
     latency_ms = $4,
     finished_at = now()
 WHERE id = $1
+  AND status IN ('queued', 'running')
 `
 
 type FailGenerationRequestParams struct {
@@ -27,17 +28,20 @@ type FailGenerationRequestParams struct {
 	LatencyMs    pgtype.Int4 `json:"latency_ms"`
 }
 
-func (q *Queries) FailGenerationRequest(ctx context.Context, arg FailGenerationRequestParams) error {
-	_, err := q.db.Exec(ctx, failGenerationRequest,
+func (q *Queries) FailGenerationRequest(ctx context.Context, arg FailGenerationRequestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failGenerationRequest,
 		arg.ID,
 		arg.Column2,
 		arg.ErrorMessage,
 		arg.LatencyMs,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const finishGenerationRequest = `-- name: FinishGenerationRequest :exec
+const finishGenerationRequest = `-- name: FinishGenerationRequest :execrows
 UPDATE generation_requests
 SET output_tokens = $2,
     latency_ms = $3,
@@ -47,6 +51,7 @@ SET output_tokens = $2,
     cost_credits_image = COALESCE($5, cost_credits_image),
     cost_credits_video = COALESCE($6, cost_credits_video)
 WHERE id = $1
+  AND status IN ('queued', 'running')
 `
 
 type FinishGenerationRequestParams struct {
@@ -58,8 +63,8 @@ type FinishGenerationRequestParams struct {
 	CostCreditsVideo pgtype.Int4 `json:"cost_credits_video"`
 }
 
-func (q *Queries) FinishGenerationRequest(ctx context.Context, arg FinishGenerationRequestParams) error {
-	_, err := q.db.Exec(ctx, finishGenerationRequest,
+func (q *Queries) FinishGenerationRequest(ctx context.Context, arg FinishGenerationRequestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishGenerationRequest,
 		arg.ID,
 		arg.OutputTokens,
 		arg.LatencyMs,
@@ -67,44 +72,82 @@ func (q *Queries) FinishGenerationRequest(ctx context.Context, arg FinishGenerat
 		arg.CostCreditsImage,
 		arg.CostCreditsVideo,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getGenerationRequestByUpdateID = `-- name: GetGenerationRequestByUpdateID :one
+SELECT id, user_id, update_id, kind, provider, model, request_id_ext, prompt_hash, input_tokens, output_tokens, cost_credits_text, cost_credits_image, cost_credits_video, status, error_message, latency_ms, created_at, finished_at
+FROM generation_requests
+WHERE update_id = $1
+`
+
+func (q *Queries) GetGenerationRequestByUpdateID(ctx context.Context, updateID pgtype.Int8) (GenerationRequest, error) {
+	row := q.db.QueryRow(ctx, getGenerationRequestByUpdateID, updateID)
+	var i GenerationRequest
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.UpdateID,
+		&i.Kind,
+		&i.Provider,
+		&i.Model,
+		&i.RequestIDExt,
+		&i.PromptHash,
+		&i.InputTokens,
+		&i.OutputTokens,
+		&i.CostCreditsText,
+		&i.CostCreditsImage,
+		&i.CostCreditsVideo,
+		&i.Status,
+		&i.ErrorMessage,
+		&i.LatencyMs,
+		&i.CreatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
 }
 
 const insertGenerationRequest = `-- name: InsertGenerationRequest :one
 INSERT INTO generation_requests (
-  user_id, kind, provider, model, request_id_ext, prompt_hash,
+  user_id, update_id, kind, provider, model, request_id_ext, prompt_hash,
   input_tokens, status, created_at
 ) VALUES (
-  $1,$2::gen_type,$3,$4,$5,$6,$7,$8::gen_request_status, now()
-) RETURNING id, user_id, kind, provider, model, request_id_ext, prompt_hash, input_tokens, output_tokens, cost_credits_text, cost_credits_image, cost_credits_video, status, error_message, latency_ms, created_at, finished_at
+  $1,$2,$3::gen_type,$4,$5,$6,$7,$8,$9::gen_request_status, now()
+) RETURNING id, user_id, update_id, kind, provider, model, request_id_ext, prompt_hash, input_tokens, output_tokens, cost_credits_text, cost_credits_image, cost_credits_video, status, error_message, latency_ms, created_at, finished_at
 `
 
 type InsertGenerationRequestParams struct {
 	UserID       int64       `json:"user_id"`
-	Column2      interface{} `json:"column_2"`
+	UpdateID     pgtype.Int8 `json:"update_id"`
+	Column3      interface{} `json:"column_3"`
 	Provider     string      `json:"provider"`
 	Model        string      `json:"model"`
 	RequestIDExt pgtype.Text `json:"request_id_ext"`
 	PromptHash   pgtype.Text `json:"prompt_hash"`
 	InputTokens  pgtype.Int4 `json:"input_tokens"`
-	Column8      interface{} `json:"column_8"`
+	Column9      interface{} `json:"column_9"`
 }
 
 func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerationRequestParams) (GenerationRequest, error) {
 	row := q.db.QueryRow(ctx, insertGenerationRequest,
 		arg.UserID,
-		arg.Column2,
+		arg.UpdateID,
+		arg.Column3,
 		arg.Provider,
 		arg.Model,
 		arg.RequestIDExt,
 		arg.PromptHash,
 		arg.InputTokens,
-		arg.Column8,
+		arg.Column9,
 	)
 	var i GenerationRequest
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
+		&i.UpdateID,
 		&i.Kind,
 		&i.Provider,
 		&i.Model,

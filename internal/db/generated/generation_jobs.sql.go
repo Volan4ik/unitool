@@ -64,6 +64,8 @@ INSERT INTO generation_jobs (
   kind, provider, model, prompt, status, max_attempts
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', COALESCE($9, 3))
+ON CONFLICT (generation_request_id) DO UPDATE
+SET updated_at = now()
 RETURNING id, generation_request_id, user_id, chat_id, conversation_id, kind, provider, model, prompt, status, result_text, error_message, attempts, max_attempts, next_attempt_at, created_at, updated_at, finished_at
 `
 
@@ -115,7 +117,7 @@ func (q *Queries) EnqueueGenerationJob(ctx context.Context, arg EnqueueGeneratio
 	return i, err
 }
 
-const failStaleRunningJobs = `-- name: FailStaleRunningJobs :execrows
+const failStaleRunningJobs = `-- name: FailStaleRunningJobs :many
 UPDATE generation_jobs
 SET status = 'failed',
     error_message = 'stale running job exhausted attempts',
@@ -124,14 +126,43 @@ SET status = 'failed',
 WHERE status = 'running'
   AND updated_at < now() - ($1::int * interval '1 second')
   AND attempts >= max_attempts
+RETURNING id, generation_request_id, user_id, chat_id, kind, error_message
 `
 
-func (q *Queries) FailStaleRunningJobs(ctx context.Context, dollar_1 int32) (int64, error) {
-	result, err := q.db.Exec(ctx, failStaleRunningJobs, dollar_1)
+type FailStaleRunningJobsRow struct {
+	ID                  int64       `json:"id"`
+	GenerationRequestID int64       `json:"generation_request_id"`
+	UserID              int64       `json:"user_id"`
+	ChatID              int64       `json:"chat_id"`
+	Kind                string      `json:"kind"`
+	ErrorMessage        pgtype.Text `json:"error_message"`
+}
+
+func (q *Queries) FailStaleRunningJobs(ctx context.Context, dollar_1 int32) ([]FailStaleRunningJobsRow, error) {
+	rows, err := q.db.Query(ctx, failStaleRunningJobs, dollar_1)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected(), nil
+	defer rows.Close()
+	var items []FailStaleRunningJobsRow
+	for rows.Next() {
+		var i FailStaleRunningJobsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GenerationRequestID,
+			&i.UserID,
+			&i.ChatID,
+			&i.Kind,
+			&i.ErrorMessage,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markGenerationJobDone = `-- name: MarkGenerationJobDone :one
@@ -158,13 +189,14 @@ func (q *Queries) MarkGenerationJobDone(ctx context.Context, arg MarkGenerationJ
 	return id, err
 }
 
-const markGenerationJobFailed = `-- name: MarkGenerationJobFailed :exec
+const markGenerationJobFailed = `-- name: MarkGenerationJobFailed :execrows
 UPDATE generation_jobs
 SET status = 'failed',
     error_message = $2,
     finished_at = now(),
     updated_at = now()
 WHERE id = $1
+  AND status = 'running'
 `
 
 type MarkGenerationJobFailedParams struct {
@@ -172,18 +204,22 @@ type MarkGenerationJobFailedParams struct {
 	ErrorMessage pgtype.Text `json:"error_message"`
 }
 
-func (q *Queries) MarkGenerationJobFailed(ctx context.Context, arg MarkGenerationJobFailedParams) error {
-	_, err := q.db.Exec(ctx, markGenerationJobFailed, arg.ID, arg.ErrorMessage)
-	return err
+func (q *Queries) MarkGenerationJobFailed(ctx context.Context, arg MarkGenerationJobFailedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markGenerationJobFailed, arg.ID, arg.ErrorMessage)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const requeueGenerationJob = `-- name: RequeueGenerationJob :exec
+const requeueGenerationJob = `-- name: RequeueGenerationJob :execrows
 UPDATE generation_jobs
 SET status = 'queued',
     error_message = $2,
     next_attempt_at = $3,
     updated_at = now()
 WHERE id = $1
+  AND status = 'running'
 `
 
 type RequeueGenerationJobParams struct {
@@ -192,9 +228,12 @@ type RequeueGenerationJobParams struct {
 	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
 }
 
-func (q *Queries) RequeueGenerationJob(ctx context.Context, arg RequeueGenerationJobParams) error {
-	_, err := q.db.Exec(ctx, requeueGenerationJob, arg.ID, arg.ErrorMessage, arg.NextAttemptAt)
-	return err
+func (q *Queries) RequeueGenerationJob(ctx context.Context, arg RequeueGenerationJobParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requeueGenerationJob, arg.ID, arg.ErrorMessage, arg.NextAttemptAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const requeueStaleRunningJobs = `-- name: RequeueStaleRunningJobs :execrows

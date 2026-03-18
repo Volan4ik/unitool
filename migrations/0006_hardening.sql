@@ -49,6 +49,9 @@ CREATE INDEX IF NOT EXISTS idx_users_is_banned ON users(is_banned);
 ALTER TABLE packages
   ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'RUB';
 
+ALTER TABLE generation_requests
+  ADD COLUMN IF NOT EXISTS update_id BIGINT;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -73,6 +76,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_tg_payment_charge
 CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_provider_payment_charge
   ON orders(provider_payment_charge_id)
   WHERE provider_payment_charge_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_generation_requests_update_id
+  ON generation_requests(update_id)
+  WHERE update_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_generation_jobs_request_id
+  ON generation_jobs(generation_request_id);
 
 DO $$
 BEGIN

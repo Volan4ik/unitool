@@ -146,18 +146,15 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 	tx, err := s.Pool.Begin(dbCtx)
 	if err != nil {
 		log.Printf("begin payment tx failed: %v", err)
-		s.failOrder(dbCtx, orderUUID, "payment_tx_begin_failed")
 		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
 		return err
 	}
 	committed := false
-	failReason := ""
+	orderAlreadyPaid := false
+	creditsInserted := int64(0)
 	defer func() {
 		if !committed {
 			_ = tx.Rollback(dbCtx)
-			if failReason != "" {
-				s.failOrder(dbCtx, orderUUID, failReason)
-			}
 		}
 	}()
 
@@ -171,20 +168,16 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 		if errors.Is(err, pgx.ErrNoRows) {
 			current, gerr := s.Q.GetOrderByID(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
 			if gerr == nil && current.Status == "paid" {
-				log.Printf("order already paid (duplicate update): %s", orderUUID.String())
-				return nil
-			}
-			if gerr != nil {
+				orderAlreadyPaid = true
+			} else if gerr != nil {
 				log.Printf("illegal payment transition and order lookup failed for order %s: %v", orderUUID.String(), gerr)
-				failReason = "illegal_transition_lookup_failed"
 				return gerr
+			} else {
+				log.Printf("illegal payment transition for order %s", orderUUID.String())
+				return fmt.Errorf("illegal payment transition for order %s, current status=%s", orderUUID.String(), current.Status)
 			}
-			log.Printf("illegal payment transition for order %s", orderUUID.String())
-			failReason = "illegal_payment_transition"
-			return fmt.Errorf("illegal payment transition for order %s, current status=%s", orderUUID.String(), current.Status)
 		}
 		log.Printf("mark order paid failed: %v", err)
-		failReason = "mark_paid_failed"
 		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
 		return err
 	}
@@ -193,7 +186,6 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 	pkg, err := qtx.GetPackageByID(dbCtx, order.PackageID)
 	if err != nil {
 		log.Printf("get package: %v", err)
-		failReason = "package_lookup_failed"
 		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но пакет не найден. Свяжитесь с поддержкой."))
 		return err
 	}
@@ -205,7 +197,7 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 	}
 	metaBytes, _ := json.Marshal(meta)
 	opKey := fmt.Sprintf("purchase:%s", orderUUID.String())
-	rows, err := qtx.AddPurchaseCredits(dbCtx, db.AddPurchaseCreditsParams{
+	creditsInserted, err = qtx.AddPurchaseCredits(dbCtx, db.AddPurchaseCreditsParams{
 		UserID:     order.UserID,
 		OrderID:    pgtype.UUID{Bytes: orderUUID, Valid: true},
 		DeltaText:  pkg.TextCredits,
@@ -216,23 +208,25 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 	})
 	if err != nil {
 		log.Printf("grant credits: %v", err)
-		failReason = "grant_credits_failed"
 		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но начисление не удалось. Свяжитесь с поддержкой."))
 		return err
 	}
-	if rows == 0 {
-		log.Printf("grant credits affected 0 rows for order %s", orderUUID.String())
-		failReason = "grant_credits_conflict"
-		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но начисление не удалось. Свяжитесь с поддержкой."))
-		return fmt.Errorf("grant credits affected 0 rows for order %s", orderUUID.String())
+	if creditsInserted == 0 {
+		log.Printf("grant credits skipped (already granted) order=%s", orderUUID.String())
 	}
 	if err := tx.Commit(dbCtx); err != nil {
 		log.Printf("commit payment tx failed: %v", err)
-		failReason = "payment_commit_failed"
 		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не завершилась. Свяжитесь с поддержкой."))
 		return err
 	}
 	committed = true
+
+	log.Printf(
+		"payment processed order=%s already_paid=%t credits_inserted=%d",
+		orderUUID.String(),
+		orderAlreadyPaid,
+		creditsInserted,
+	)
 
 	confirm := tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("Оплата успешна ✅\nЗаказ: %s\nСумма: %d ₽", payload, amountRub))
 	if _, err := s.Bot.Send(confirm); err != nil {

@@ -184,6 +184,7 @@ EXECUTE FUNCTION prevent_negative_balances();
 CREATE TABLE IF NOT EXISTS generation_requests (
   id                   BIGSERIAL PRIMARY KEY,
   user_id              BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  update_id            BIGINT UNIQUE,
   kind                 gen_type NOT NULL,
   provider             text NOT NULL,
   model                text NOT NULL,
@@ -204,6 +205,9 @@ CREATE TABLE IF NOT EXISTS generation_requests (
 CREATE INDEX IF NOT EXISTS idx_gen_user_time ON generation_requests(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_gen_kind ON generation_requests(kind, created_at);
 CREATE INDEX IF NOT EXISTS idx_gen_provider_model ON generation_requests(provider, model);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_generation_requests_update_id
+  ON generation_requests(update_id)
+  WHERE update_id IS NOT NULL;
 
 CREATE OR REPLACE VIEW v_user_balances AS
 SELECT

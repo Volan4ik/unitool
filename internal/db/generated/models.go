@@ -62,6 +62,7 @@ type GenerationJob struct {
 type GenerationRequest struct {
 	ID               int64              `json:"id"`
 	UserID           int64              `json:"user_id"`
+	UpdateID         pgtype.Int8        `json:"update_id"`
 	Kind             interface{}        `json:"kind"`
 	Provider         string             `json:"provider"`
 	Model            string             `json:"model"`

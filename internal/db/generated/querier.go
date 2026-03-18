@@ -24,10 +24,11 @@ type Querier interface {
 	CreatePackage(ctx context.Context, arg CreatePackageParams) (Package, error)
 	DeletePackage(ctx context.Context, id int64) (int64, error)
 	EnqueueGenerationJob(ctx context.Context, arg EnqueueGenerationJobParams) (GenerationJob, error)
-	FailGenerationRequest(ctx context.Context, arg FailGenerationRequestParams) error
-	FailStaleRunningJobs(ctx context.Context, dollar_1 int32) (int64, error)
-	FinishGenerationRequest(ctx context.Context, arg FinishGenerationRequestParams) error
+	FailGenerationRequest(ctx context.Context, arg FailGenerationRequestParams) (int64, error)
+	FailStaleRunningJobs(ctx context.Context, dollar_1 int32) ([]FailStaleRunningJobsRow, error)
+	FinishGenerationRequest(ctx context.Context, arg FinishGenerationRequestParams) (int64, error)
 	GetBalancesByUserID(ctx context.Context, id int64) (GetBalancesByUserIDRow, error)
+	GetGenerationRequestByUpdateID(ctx context.Context, updateID pgtype.Int8) (GenerationRequest, error)
 	GetLastChatHistory(ctx context.Context, arg GetLastChatHistoryParams) ([]GetLastChatHistoryRow, error)
 	GetLastPaidPackageByUser(ctx context.Context, userID int64) (GetLastPaidPackageByUserRow, error)
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByIDRow, error)
@@ -42,7 +43,7 @@ type Querier interface {
 	ListActivePackages(ctx context.Context) ([]Package, error)
 	ListPackages(ctx context.Context) ([]Package, error)
 	MarkGenerationJobDone(ctx context.Context, arg MarkGenerationJobDoneParams) (int64, error)
-	MarkGenerationJobFailed(ctx context.Context, arg MarkGenerationJobFailedParams) error
+	MarkGenerationJobFailed(ctx context.Context, arg MarkGenerationJobFailedParams) (int64, error)
 	MarkOrderFailed(ctx context.Context, id pgtype.UUID) (int64, error)
 	MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (pgtype.UUID, error)
 	MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) (int64, error)
@@ -51,7 +52,7 @@ type Querier interface {
 	RefundImage(ctx context.Context, arg RefundImageParams) error
 	RefundText(ctx context.Context, arg RefundTextParams) error
 	RefundVideo(ctx context.Context, arg RefundVideoParams) error
-	RequeueGenerationJob(ctx context.Context, arg RequeueGenerationJobParams) error
+	RequeueGenerationJob(ctx context.Context, arg RequeueGenerationJobParams) (int64, error)
 	RequeueStaleRunningJobs(ctx context.Context, dollar_1 int32) (int64, error)
 	SearchUsersByUsername(ctx context.Context, arg SearchUsersByUsernameParams) ([]User, error)
 	SetPackageActive(ctx context.Context, arg SetPackageActiveParams) (int64, error)

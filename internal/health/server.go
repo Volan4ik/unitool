@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -56,7 +57,7 @@ func (s *Server) HandleFunc(pattern string, handler http.HandlerFunc) {
 	s.mux.HandleFunc(pattern, handler)
 }
 
-func (s *Server) Start(ctx context.Context) {
+func (s *Server) Start(ctx context.Context) error {
 	s.srv = &http.Server{
 		Addr:              s.addr,
 		Handler:           s.mux,
@@ -65,11 +66,15 @@ func (s *Server) Start(ctx context.Context) {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return err
+	}
 
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		if err := s.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := s.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("health server stopped: %v", err)
 		}
 	}()
@@ -81,6 +86,7 @@ func (s *Server) Start(ctx context.Context) {
 			log.Printf("health server shutdown error: %v", err)
 		}
 	}()
+	return nil
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {

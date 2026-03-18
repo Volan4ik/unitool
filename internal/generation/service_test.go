@@ -3,6 +3,8 @@ package generation
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -10,9 +12,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	db "unitool/internal/db/generated"
+	"unitool/pkg/provider"
 )
 
 type fakeTelegramAPI struct {
@@ -223,5 +229,355 @@ func TestSendMediaResultFallbackEmptyOutput(t *testing.T) {
 	}
 	if txt := fake.lastText(); !strings.Contains(txt, "не вернул ссылку") {
 		t.Fatalf("expected empty-output fallback text, got %q", txt)
+	}
+}
+
+type fakeRow struct {
+	err error
+}
+
+func (r fakeRow) Scan(dest ...interface{}) error { return r.err }
+
+type fakeGenerationDBTX struct {
+	mu sync.Mutex
+
+	requeueRows int64
+	requeueErr  error
+
+	markFailedRows int64
+	markFailedErr  error
+
+	failReqRows int64
+	failReqErr  error
+	refundErr   error
+
+	finishRows int64
+	finishErr  error
+
+	markDoneErr error
+
+	insertAssistantErr error
+
+	requeueCalls    int
+	markFailedCalls int
+	failReqCalls    int
+	refundCalls     int
+	finishCalls     int
+	markDoneCalls   int
+	insertMsgCalls  int
+
+	requeueQuery    string
+	markFailedQuery string
+}
+
+func (f *fakeGenerationDBTX) Exec(_ context.Context, query string, _ ...interface{}) (pgconn.CommandTag, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case strings.Contains(query, "name: RequeueGenerationJob"):
+		f.requeueCalls++
+		f.requeueQuery = query
+		if f.requeueErr != nil {
+			return pgconn.NewCommandTag("UPDATE 0"), f.requeueErr
+		}
+		return pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", f.requeueRows)), nil
+	case strings.Contains(query, "name: MarkGenerationJobFailed"):
+		f.markFailedCalls++
+		f.markFailedQuery = query
+		if f.markFailedErr != nil {
+			return pgconn.NewCommandTag("UPDATE 0"), f.markFailedErr
+		}
+		return pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", f.markFailedRows)), nil
+	case strings.Contains(query, "name: FinishGenerationRequest"):
+		f.finishCalls++
+		if f.finishErr != nil {
+			return pgconn.NewCommandTag("UPDATE 0"), f.finishErr
+		}
+		rows := f.finishRows
+		if rows == 0 {
+			rows = 1
+		}
+		return pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", rows)), nil
+	case strings.Contains(query, "name: FailGenerationRequest"):
+		f.failReqCalls++
+		if f.failReqErr != nil {
+			return pgconn.NewCommandTag("UPDATE 0"), f.failReqErr
+		}
+		rows := f.failReqRows
+		if rows == 0 {
+			rows = 1
+		}
+		return pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", rows)), nil
+	case strings.Contains(query, "name: RefundText"),
+		strings.Contains(query, "name: RefundImage"),
+		strings.Contains(query, "name: RefundVideo"):
+		f.refundCalls++
+		return pgconn.NewCommandTag("INSERT 0 1"), f.refundErr
+	default:
+		return pgconn.NewCommandTag("UPDATE 1"), nil
+	}
+}
+
+func (f *fakeGenerationDBTX) Query(context.Context, string, ...interface{}) (pgx.Rows, error) {
+	return nil, errors.New("unexpected query call in test")
+}
+
+func (f *fakeGenerationDBTX) QueryRow(_ context.Context, query string, _ ...interface{}) pgx.Row {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case strings.Contains(query, "name: MarkGenerationJobDone"):
+		f.markDoneCalls++
+		return fakeRow{err: f.markDoneErr}
+	case strings.Contains(query, "name: InsertChatMessage"):
+		f.insertMsgCalls++
+		return fakeRow{err: f.insertAssistantErr}
+	default:
+		return fakeRow{err: errors.New("unexpected queryrow call in test")}
+	}
+}
+
+type fakeModelProvider struct {
+	resp provider.ModelResponse
+	err  error
+}
+
+func (f *fakeModelProvider) Generate(context.Context, provider.ModelRequest) (provider.ModelResponse, error) {
+	return f.resp, f.err
+}
+
+func (f *fakeModelProvider) GenerateStream(context.Context, provider.ModelRequest, func(string) error) (provider.ModelResponse, error) {
+	return provider.ModelResponse{}, errors.New("not implemented")
+}
+
+func TestHandleFailedAttemptRequeueSuccess(t *testing.T) {
+	fakeTG := newFakeTelegramAPI()
+	fakeDB := &fakeGenerationDBTX{requeueRows: 1}
+	svc := &Service{
+		Bot: newTestBot(t, fakeTG),
+		Q:   db.New(fakeDB),
+	}
+	job := db.GenerationJob{
+		ID:                  100,
+		GenerationRequestID: 200,
+		UserID:              300,
+		ChatID:              400,
+		Kind:                "image",
+		Attempts:            1,
+		MaxAttempts:         3,
+	}
+	svc.handleFailedAttempt(context.Background(), job, errors.New("provider timeout"), 100)
+
+	if fakeDB.requeueCalls != 1 {
+		t.Fatalf("expected requeue call=1, got %d", fakeDB.requeueCalls)
+	}
+	if fakeDB.markFailedCalls != 0 || fakeDB.failReqCalls != 0 || fakeDB.refundCalls != 0 {
+		t.Fatalf("expected no finalization calls, got markFailed=%d failReq=%d refund=%d", fakeDB.markFailedCalls, fakeDB.failReqCalls, fakeDB.refundCalls)
+	}
+	if !strings.Contains(fakeDB.requeueQuery, "status = 'running'") {
+		t.Fatalf("expected running-status guard in requeue query, got %q", fakeDB.requeueQuery)
+	}
+	if got := fakeTG.callCount("sendMessage"); got != 0 {
+		t.Fatalf("expected no user message on requeue success, got sendMessage=%d", got)
+	}
+}
+
+func TestHandleFailedAttemptRequeueSkippedStaleRunner(t *testing.T) {
+	fakeTG := newFakeTelegramAPI()
+	fakeDB := &fakeGenerationDBTX{requeueRows: 0}
+	svc := &Service{
+		Bot: newTestBot(t, fakeTG),
+		Q:   db.New(fakeDB),
+	}
+	job := db.GenerationJob{
+		ID:                  101,
+		GenerationRequestID: 201,
+		UserID:              301,
+		ChatID:              401,
+		Kind:                "video",
+		Attempts:            1,
+		MaxAttempts:         3,
+	}
+	svc.handleFailedAttempt(context.Background(), job, errors.New("provider timeout"), 100)
+
+	if fakeDB.requeueCalls != 1 {
+		t.Fatalf("expected requeue call=1, got %d", fakeDB.requeueCalls)
+	}
+	if fakeDB.markFailedCalls != 0 || fakeDB.failReqCalls != 0 || fakeDB.refundCalls != 0 {
+		t.Fatalf("expected stale skip without finalization, got markFailed=%d failReq=%d refund=%d", fakeDB.markFailedCalls, fakeDB.failReqCalls, fakeDB.refundCalls)
+	}
+	if got := fakeTG.callCount("sendMessage"); got != 0 {
+		t.Fatalf("expected no user message on stale-skip requeue, got sendMessage=%d", got)
+	}
+}
+
+func TestHandleFailedAttemptRequeueErrorFallbackFinalize(t *testing.T) {
+	fakeTG := newFakeTelegramAPI()
+	fakeDB := &fakeGenerationDBTX{
+		requeueErr:     errors.New("requeue failed"),
+		markFailedRows: 1,
+	}
+	svc := &Service{
+		Bot: newTestBot(t, fakeTG),
+		Q:   db.New(fakeDB),
+	}
+	job := db.GenerationJob{
+		ID:                  102,
+		GenerationRequestID: 202,
+		UserID:              302,
+		ChatID:              402,
+		Kind:                "image",
+		Attempts:            1,
+		MaxAttempts:         3,
+	}
+	svc.handleFailedAttempt(context.Background(), job, errors.New("provider timeout"), 100)
+
+	if fakeDB.requeueCalls != 1 {
+		t.Fatalf("expected requeue call=1, got %d", fakeDB.requeueCalls)
+	}
+	if fakeDB.markFailedCalls != 1 || fakeDB.failReqCalls != 1 || fakeDB.refundCalls != 1 {
+		t.Fatalf("expected fallback finalization calls markFailed=1 failReq=1 refund=1, got markFailed=%d failReq=%d refund=%d", fakeDB.markFailedCalls, fakeDB.failReqCalls, fakeDB.refundCalls)
+	}
+	if !strings.Contains(fakeDB.markFailedQuery, "status = 'running'") {
+		t.Fatalf("expected running-status guard in mark-failed query, got %q", fakeDB.markFailedQuery)
+	}
+	if got := fakeTG.callCount("sendMessage"); got != 1 {
+		t.Fatalf("expected one user failure message, got sendMessage=%d", got)
+	}
+}
+
+func TestHandleFailedAttemptMaxAttemptsStaleRunnerSkip(t *testing.T) {
+	fakeTG := newFakeTelegramAPI()
+	fakeDB := &fakeGenerationDBTX{
+		markFailedRows: 0,
+	}
+	svc := &Service{
+		Bot: newTestBot(t, fakeTG),
+		Q:   db.New(fakeDB),
+	}
+	job := db.GenerationJob{
+		ID:                  103,
+		GenerationRequestID: 203,
+		UserID:              303,
+		ChatID:              403,
+		Kind:                "video",
+		Attempts:            3,
+		MaxAttempts:         3,
+	}
+	svc.handleFailedAttempt(context.Background(), job, errors.New("provider timeout"), 100)
+
+	if fakeDB.markFailedCalls != 1 {
+		t.Fatalf("expected markFailed call=1, got %d", fakeDB.markFailedCalls)
+	}
+	if fakeDB.failReqCalls != 0 || fakeDB.refundCalls != 0 {
+		t.Fatalf("expected stale-skip to avoid request/refund writes, got failReq=%d refund=%d", fakeDB.failReqCalls, fakeDB.refundCalls)
+	}
+	if !strings.Contains(fakeDB.markFailedQuery, "status = 'running'") {
+		t.Fatalf("expected running-status guard in mark-failed query, got %q", fakeDB.markFailedQuery)
+	}
+	if got := fakeTG.callCount("sendMessage"); got != 0 {
+		t.Fatalf("expected no user message on stale-skip finalization, got sendMessage=%d", got)
+	}
+}
+
+func TestHandleFailedAttemptRefundFailureUsesPendingMessage(t *testing.T) {
+	fakeTG := newFakeTelegramAPI()
+	fakeDB := &fakeGenerationDBTX{
+		markFailedRows: 1,
+		refundErr:      errors.New("db timeout"),
+	}
+	svc := &Service{
+		Bot: newTestBot(t, fakeTG),
+		Q:   db.New(fakeDB),
+	}
+	job := db.GenerationJob{
+		ID:                  104,
+		GenerationRequestID: 204,
+		UserID:              304,
+		ChatID:              404,
+		Kind:                "image",
+		Attempts:            3,
+		MaxAttempts:         3,
+	}
+
+	svc.handleFailedAttempt(context.Background(), job, errors.New("provider timeout"), 100)
+
+	if got := fakeTG.callCount("sendMessage"); got != 1 {
+		t.Fatalf("expected one user message, got sendMessage=%d", got)
+	}
+	msg := fakeTG.lastText()
+	if strings.Contains(msg, "Попытка возвращена") {
+		t.Fatalf("expected no definitive refund message on refund failure, got %q", msg)
+	}
+	if !strings.Contains(msg, "в обработке") {
+		t.Fatalf("expected pending refund message, got %q", msg)
+	}
+}
+
+func TestProcessJobMarkDoneNoRowsSkipsSuccessSideEffects(t *testing.T) {
+	fakeTG := newFakeTelegramAPI()
+	fakeDB := &fakeGenerationDBTX{
+		markDoneErr: pgx.ErrNoRows,
+	}
+	svc := &Service{
+		Bot:        newTestBot(t, fakeTG),
+		Q:          db.New(fakeDB),
+		Prov:       &fakeModelProvider{resp: provider.ModelResponse{Output: "https://cdn.example.com/x.png", Tokens: 8}},
+		GenTimeout: 5 * time.Second,
+	}
+	job := db.GenerationJob{
+		ID:                  105,
+		GenerationRequestID: 205,
+		UserID:              305,
+		ChatID:              405,
+		Kind:                "image",
+		Model:               "m",
+		Provider:            "p",
+		Prompt:              "test",
+	}
+
+	svc.processJob(context.Background(), job)
+
+	if fakeDB.markDoneCalls != 1 {
+		t.Fatalf("expected mark-done call=1, got %d", fakeDB.markDoneCalls)
+	}
+	if fakeDB.finishCalls != 0 || fakeDB.insertMsgCalls != 0 {
+		t.Fatalf("expected no success side-effects, got finish=%d insert=%d", fakeDB.finishCalls, fakeDB.insertMsgCalls)
+	}
+	if got := fakeTG.callCount("sendPhoto"); got != 0 {
+		t.Fatalf("expected no media send when mark-done skipped, got sendPhoto=%d", got)
+	}
+}
+
+func TestProcessJobSuccessAfterGuardRunsSideEffects(t *testing.T) {
+	fakeTG := newFakeTelegramAPI()
+	fakeDB := &fakeGenerationDBTX{}
+	svc := &Service{
+		Bot:        newTestBot(t, fakeTG),
+		Q:          db.New(fakeDB),
+		Prov:       &fakeModelProvider{resp: provider.ModelResponse{Output: "https://cdn.example.com/y.png", Tokens: 11}},
+		GenTimeout: 5 * time.Second,
+	}
+	job := db.GenerationJob{
+		ID:                  106,
+		GenerationRequestID: 206,
+		UserID:              306,
+		ChatID:              406,
+		Kind:                "image",
+		Model:               "m",
+		Provider:            "p",
+		Prompt:              "test",
+	}
+
+	svc.processJob(context.Background(), job)
+
+	if fakeDB.markDoneCalls != 1 {
+		t.Fatalf("expected mark-done call=1, got %d", fakeDB.markDoneCalls)
+	}
+	if fakeDB.finishCalls != 1 || fakeDB.insertMsgCalls != 1 {
+		t.Fatalf("expected success side-effects once, got finish=%d insert=%d", fakeDB.finishCalls, fakeDB.insertMsgCalls)
+	}
+	if got := fakeTG.callCount("sendPhoto"); got != 1 {
+		t.Fatalf("expected media send once, got sendPhoto=%d", got)
 	}
 }

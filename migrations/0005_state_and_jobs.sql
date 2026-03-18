@@ -27,7 +27,7 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE IF NOT EXISTS generation_jobs (
   id                     BIGSERIAL PRIMARY KEY,
-  generation_request_id  BIGINT NOT NULL REFERENCES generation_requests(id) ON DELETE CASCADE,
+  generation_request_id  BIGINT NOT NULL UNIQUE REFERENCES generation_requests(id) ON DELETE CASCADE,
   user_id                BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   chat_id                BIGINT NOT NULL,
   conversation_id        uuid NOT NULL,

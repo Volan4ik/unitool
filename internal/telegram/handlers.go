@@ -13,6 +13,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"unitool/internal/admin"
 	db "unitool/internal/db/generated"
@@ -87,6 +88,9 @@ func NewRouter(
 }
 
 func (r *Router) HandleUpdate(ctx context.Context, upd tgbotapi.Update) error {
+	if upd.UpdateID > 0 {
+		ctx = withUpdateID(ctx, int64(upd.UpdateID))
+	}
 	if upd.PreCheckoutQuery != nil {
 		return r.Pay.HandlePreCheckout(ctx, upd.PreCheckoutQuery)
 	}
@@ -247,52 +251,50 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 		hist[i], hist[j] = hist[j], hist[i]
 	}
 
-	gr, err := r.Q.InsertGenerationRequest(ctx, db.InsertGenerationRequestParams{
+	updateID := updateIDFromContext(ctx)
+	gr, created, err := r.getOrCreateGenerationRequest(ctx, db.InsertGenerationRequestParams{
 		UserID:       userID,
-		Column2:      kind,
+		UpdateID:     toInt8(updateID),
+		Column3:      kind,
 		Provider:     providerName,
 		Model:        modelID,
-		Column8:      "running",
+		Column9:      "running",
 		RequestIDExt: pgtype.Text{},
 		PromptHash:   pgtype.Text{},
 		InputTokens:  pgtype.Int4{},
-	})
+	}, updateID)
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Внутренняя ошибка. Попробуйте позже."))
 		return err
 	}
-
-	if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
-		UserID:              userID,
-		ConversationID:      pgtype.UUID{Bytes: convID, Valid: true},
-		Kind:                kind,
-		Role:                "user",
-		ContentText:         pgtype.Text{String: txt, Valid: true},
-		AttachmentUrl:       pgtype.Text{},
-		Provider:            pgtype.Text{String: providerName, Valid: true},
-		Model:               pgtype.Text{String: modelID, Valid: true},
-		InputTokens:         pgtype.Int4{},
-		OutputTokens:        pgtype.Int4{},
-		GenerationRequestID: pgtype.Int8{Int64: gr.ID, Valid: true},
-	}); err != nil {
-		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
-			ID:           gr.ID,
-			Column2:      "failed",
-			ErrorMessage: pgtype.Text{String: "insert user message failed", Valid: true},
-			LatencyMs:    pgtype.Int4{},
-		})
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось сохранить историю. Попробуйте позже."))
+	if !created && isTerminalGenerationRequestStatus(generationRequestStatus(gr.Status)) {
+		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Этот запрос уже обработан. Отправьте новый промпт."))
 		return nil
+	}
+
+	if created {
+		if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
+			UserID:              userID,
+			ConversationID:      pgtype.UUID{Bytes: convID, Valid: true},
+			Kind:                kind,
+			Role:                "user",
+			ContentText:         pgtype.Text{String: txt, Valid: true},
+			AttachmentUrl:       pgtype.Text{},
+			Provider:            pgtype.Text{String: providerName, Valid: true},
+			Model:               pgtype.Text{String: modelID, Valid: true},
+			InputTokens:         pgtype.Int4{},
+			OutputTokens:        pgtype.Int4{},
+			GenerationRequestID: pgtype.Int8{Int64: gr.ID, Valid: true},
+		}); err != nil {
+			r.failGenerationRequestWithLog(ctx, "sync-generation", gr.ID, "failed", "insert user message failed", pgtype.Int4{})
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось сохранить историю. Попробуйте позже."))
+			return nil
+		}
 	}
 
 	chargeMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "sync_generation"})
 	if err := r.chargeOneCredit(ctx, userID, kind, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, kind)); err != nil {
-		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
-			ID:           gr.ID,
-			Column2:      "failed_balance",
-			ErrorMessage: pgtype.Text{String: err.Error(), Valid: true},
-			LatencyMs:    pgtype.Int4{},
-		})
+		r.failGenerationRequestWithLog(ctx, "sync-generation", gr.ID, "failed_balance", err.Error(), pgtype.Int4{})
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Недостаточно генераций для %s", kindToRus(kind))))
 		return nil
 	}
@@ -315,110 +317,110 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 
 	var resp provider.ModelResponse
 	pendingMsgID := 0
-	pendingChatID := m.Chat.ID
 	streamEditFailed := false
-	if kind == "text" {
-		pending, sendErr := r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "⌛ Генерирую…"))
-		if sendErr == nil {
-			pendingMsgID = pending.MessageID
-		} else {
-			log.Printf("stream: send pending message failed chat_id=%d err=%v", m.Chat.ID, sendErr)
-		}
-		lastEdit := time.Now()
-		var acc strings.Builder
-		throttle := r.EditThrottle
-		if throttle <= 0 {
-			throttle = 900 * time.Millisecond
-		}
-		edits := 0
-		windowStart := time.Now()
-		onDelta := func(piece string) error {
-			acc.WriteString(piece)
-			if pendingMsgID == 0 {
-				return nil
-			}
-			if time.Since(lastEdit) >= throttle {
-				if time.Since(windowStart) >= time.Minute {
-					windowStart = time.Now()
-					edits = 0
-				}
-				if r.EditMaxPerMin <= 0 || edits < r.EditMaxPerMin {
-					editText := firstTelegramChunk(acc.String(), tgEditPreviewLimit)
-					if err := r.editMessageText(m.Chat.ID, pendingMsgID, editText); err != nil {
-						streamEditFailed = true
-						log.Printf("stream: edit delta failed chat_id=%d msg_id=%d err=%v", m.Chat.ID, pendingMsgID, err)
-					}
-					lastEdit = time.Now()
-					edits++
-					metrics.StreamEdits.WithLabelValues(kind).Inc()
-				}
-			}
+	pending, sendErr := r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "⌛ Генерирую…"))
+	if sendErr == nil {
+		pendingMsgID = pending.MessageID
+	} else {
+		log.Printf("stream: send pending message failed chat_id=%d err=%v", m.Chat.ID, sendErr)
+	}
+	lastEdit := time.Now()
+	var acc strings.Builder
+	throttle := r.EditThrottle
+	if throttle <= 0 {
+		throttle = 900 * time.Millisecond
+	}
+	edits := 0
+	windowStart := time.Now()
+	onDelta := func(piece string) error {
+		acc.WriteString(piece)
+		if pendingMsgID == 0 {
 			return nil
 		}
-		resp, err = r.Prov.GenerateStream(ctxGen, provider.ModelRequest{
-			UserID:  userID,
-			Input:   txt,
-			Model:   modelID,
-			History: history,
-			Params:  map[string]any{"kind": kind},
-		}, onDelta)
-		finalText := strings.TrimSpace(resp.Output)
-		if finalText == "" {
-			finalText = acc.String()
-		}
-		if finalText != "" {
-			if pendingMsgID != 0 && !streamEditFailed {
-				if err := r.sendFinalStreamText(m.Chat.ID, pendingMsgID, finalText); err != nil {
+		if time.Since(lastEdit) >= throttle {
+			if time.Since(windowStart) >= time.Minute {
+				windowStart = time.Now()
+				edits = 0
+			}
+			if r.EditMaxPerMin <= 0 || edits < r.EditMaxPerMin {
+				editText := firstTelegramChunk(acc.String(), tgEditPreviewLimit)
+				if err := r.editMessageText(m.Chat.ID, pendingMsgID, editText); err != nil {
 					streamEditFailed = true
-					log.Printf("stream: finalize edit failed chat_id=%d msg_id=%d err=%v", m.Chat.ID, pendingMsgID, err)
+					log.Printf("stream: edit delta failed chat_id=%d msg_id=%d err=%v", m.Chat.ID, pendingMsgID, err)
 				}
-			}
-			if pendingMsgID == 0 || streamEditFailed {
-				if err := r.sendTextChunks(m.Chat.ID, finalText); err != nil {
-					log.Printf("stream: fallback chunk send failed chat_id=%d err=%v", m.Chat.ID, err)
-					_, _ = r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Ответ готов, но не удалось отправить его полностью."))
-				}
+				lastEdit = time.Now()
+				edits++
+				metrics.StreamEdits.WithLabelValues(kind).Inc()
 			}
 		}
-	} else {
-		resp, err = r.Prov.Generate(ctxGen, provider.ModelRequest{
-			UserID:  userID,
-			Input:   txt,
-			Model:   modelID,
-			History: history,
-			Params:  map[string]any{"kind": kind},
-		})
+		return nil
+	}
+	resp, err = r.Prov.GenerateStream(ctxGen, provider.ModelRequest{
+		UserID:  userID,
+		Input:   txt,
+		Model:   modelID,
+		History: history,
+		Params:  map[string]any{"kind": kind},
+	}, onDelta)
+	finalText := strings.TrimSpace(resp.Output)
+	if finalText == "" {
+		finalText = acc.String()
+	}
+	if finalText != "" {
+		if pendingMsgID != 0 && !streamEditFailed {
+			if err := r.sendFinalStreamText(m.Chat.ID, pendingMsgID, finalText); err != nil {
+				streamEditFailed = true
+				log.Printf("stream: finalize edit failed chat_id=%d msg_id=%d err=%v", m.Chat.ID, pendingMsgID, err)
+			}
+		}
+		if pendingMsgID == 0 || streamEditFailed {
+			if err := r.sendTextChunks(m.Chat.ID, finalText); err != nil {
+				log.Printf("stream: fallback chunk send failed chat_id=%d err=%v", m.Chat.ID, err)
+				_, _ = r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Ответ готов, но не удалось отправить его полностью."))
+			}
+		}
 	}
 
 	latency := time.Since(t0).Milliseconds()
 	if err != nil {
-		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
-			ID:           gr.ID,
-			Column2:      "failed",
-			ErrorMessage: pgtype.Text{String: err.Error(), Valid: true},
-			LatencyMs:    pgtype.Int4{Int32: int32(latency), Valid: true},
-		})
+		r.failGenerationRequestWithLog(
+			ctx,
+			"sync-generation",
+			gr.ID,
+			"failed",
+			err.Error(),
+			pgtype.Int4{Int32: int32(latency), Valid: true},
+		)
 		refundMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "sync_generation_failed"})
-		_ = r.refundOneCredit(ctx, userID, kind, refundMeta, fmt.Sprintf("refund:gen:%d:%s", gr.ID, kind))
+		refundErr := r.refundOneCredit(ctx, userID, kind, refundMeta, fmt.Sprintf("refund:gen:%d:%s", gr.ID, kind))
+		errMsg := "Ошибка генерации. Попытка возвращена."
+		if refundErr != nil {
+			log.Printf("sync-generation: refund failed gen_id=%d user_id=%d kind=%s err=%v reconcile_required=true", gr.ID, userID, kind, refundErr)
+			errMsg = "Ошибка генерации. Возврат попытки в обработке, попробуйте позже."
+		}
 		if pendingMsgID != 0 {
-			if e := r.editMessageText(pendingChatID, pendingMsgID, "Ошибка генерации. Попытка возвращена."); e != nil {
-				_, _ = r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Ошибка генерации. Попытка возвращена."))
+			if e := r.editMessageText(m.Chat.ID, pendingMsgID, errMsg); e != nil {
+				_, _ = r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, errMsg))
 			}
 		} else {
-			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Сервис перегружен, попробуйте позже. Попытка возвращена."))
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, errMsg))
 		}
 		return nil
 	}
 
 	cText := pgtype.Int4{Int32: 1, Valid: true}
-	_ = r.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
+	if rows, finishErr := r.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
 		ID:               gr.ID,
 		OutputTokens:     pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
 		LatencyMs:        pgtype.Int4{Int32: int32(latency), Valid: true},
 		CostCreditsText:  cText,
 		CostCreditsImage: pgtype.Int4{},
 		CostCreditsVideo: pgtype.Int4{},
-	})
+	}); finishErr != nil {
+		log.Printf("sync-generation: finish request failed gen_id=%d err=%v", gr.ID, finishErr)
+	} else if rows == 0 {
+		log.Printf("sync-generation: finish request skipped terminal-state gen_id=%d", gr.ID)
+	}
 	if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
 		UserID:              userID,
 		ConversationID:      pgtype.UUID{Bytes: convID, Valid: true},
@@ -462,52 +464,50 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 		return err
 	}
 
-	gr, err := r.Q.InsertGenerationRequest(ctx, db.InsertGenerationRequestParams{
+	updateID := updateIDFromContext(ctx)
+	gr, created, err := r.getOrCreateGenerationRequest(ctx, db.InsertGenerationRequestParams{
 		UserID:       userID,
-		Column2:      kind,
+		UpdateID:     toInt8(updateID),
+		Column3:      kind,
 		Provider:     providerName,
 		Model:        modelID,
-		Column8:      "queued",
+		Column9:      "queued",
 		RequestIDExt: pgtype.Text{},
 		PromptHash:   pgtype.Text{},
 		InputTokens:  pgtype.Int4{},
-	})
+	}, updateID)
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Внутренняя ошибка. Попробуйте позже."))
 		return err
 	}
-
-	if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
-		UserID:              userID,
-		ConversationID:      pgtype.UUID{Bytes: convID, Valid: true},
-		Kind:                kind,
-		Role:                "user",
-		ContentText:         pgtype.Text{String: txt, Valid: true},
-		AttachmentUrl:       pgtype.Text{},
-		Provider:            pgtype.Text{String: providerName, Valid: true},
-		Model:               pgtype.Text{String: modelID, Valid: true},
-		InputTokens:         pgtype.Int4{},
-		OutputTokens:        pgtype.Int4{},
-		GenerationRequestID: pgtype.Int8{Int64: gr.ID, Valid: true},
-	}); err != nil {
-		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
-			ID:           gr.ID,
-			Column2:      "failed",
-			ErrorMessage: pgtype.Text{String: "insert user message failed", Valid: true},
-			LatencyMs:    pgtype.Int4{},
-		})
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось сохранить промпт. Попробуйте позже."))
+	if !created && isTerminalGenerationRequestStatus(generationRequestStatus(gr.Status)) {
+		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Этот запрос уже обработан. Отправьте новый промпт."))
 		return nil
+	}
+
+	if created {
+		if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
+			UserID:              userID,
+			ConversationID:      pgtype.UUID{Bytes: convID, Valid: true},
+			Kind:                kind,
+			Role:                "user",
+			ContentText:         pgtype.Text{String: txt, Valid: true},
+			AttachmentUrl:       pgtype.Text{},
+			Provider:            pgtype.Text{String: providerName, Valid: true},
+			Model:               pgtype.Text{String: modelID, Valid: true},
+			InputTokens:         pgtype.Int4{},
+			OutputTokens:        pgtype.Int4{},
+			GenerationRequestID: pgtype.Int8{Int64: gr.ID, Valid: true},
+		}); err != nil {
+			r.failGenerationRequestWithLog(ctx, "async-generation", gr.ID, "failed", "insert user message failed", pgtype.Int4{})
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось сохранить промпт. Попробуйте позже."))
+			return nil
+		}
 	}
 
 	chargeMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "async_generation"})
 	if err := r.chargeOneCredit(ctx, userID, kind, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, kind)); err != nil {
-		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
-			ID:           gr.ID,
-			Column2:      "failed_balance",
-			ErrorMessage: pgtype.Text{String: err.Error(), Valid: true},
-			LatencyMs:    pgtype.Int4{},
-		})
+		r.failGenerationRequestWithLog(ctx, "async-generation", gr.ID, "failed_balance", err.Error(), pgtype.Int4{})
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Недостаточно генераций для %s", kindToRus(kind))))
 		return nil
 	}
@@ -524,19 +524,23 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 		Column9:             nil,
 	})
 	if err != nil {
-		_ = r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
-			ID:           gr.ID,
-			Column2:      "failed_queue",
-			ErrorMessage: pgtype.Text{String: err.Error(), Valid: true},
-			LatencyMs:    pgtype.Int4{},
-		})
+		r.failGenerationRequestWithLog(ctx, "async-generation", gr.ID, "failed_queue", err.Error(), pgtype.Int4{})
 		refundMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "queue_failed"})
-		_ = r.refundOneCredit(ctx, userID, kind, refundMeta, fmt.Sprintf("refund:gen:%d:%s", gr.ID, kind))
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось поставить задачу в очередь. Попытка возвращена."))
+		refundErr := r.refundOneCredit(ctx, userID, kind, refundMeta, fmt.Sprintf("refund:gen:%d:%s", gr.ID, kind))
+		msg := "Не удалось поставить задачу в очередь. Попытка возвращена."
+		if refundErr != nil {
+			log.Printf("async-generation: refund failed gen_id=%d user_id=%d kind=%s source=queue_failed err=%v reconcile_required=true", gr.ID, userID, kind, refundErr)
+			msg = "Не удалось поставить задачу в очередь. Возврат попытки в обработке, попробуйте позже."
+		}
+		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, msg))
 		return nil
 	}
 
-	r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Задача принята. Начал генерацию, пришлю результат сюда по готовности."))
+	ack := "Задача принята. Начал генерацию, пришлю результат сюда по готовности."
+	if !created {
+		ack = "Запрос уже был принят ранее. Продолжаю обработку, результат пришлю сюда."
+	}
+	r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, ack))
 	return nil
 }
 
@@ -785,6 +789,88 @@ func (r *Router) refundOneCredit(ctx context.Context, userID int64, kind string,
 	default:
 		return fmt.Errorf("unknown refund kind: %s", kind)
 	}
+}
+
+func (r *Router) failGenerationRequestWithLog(
+	ctx context.Context,
+	flow string,
+	genID int64,
+	status string,
+	errMessage string,
+	latency pgtype.Int4,
+) {
+	rows, err := r.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
+		ID:           genID,
+		Column2:      status,
+		ErrorMessage: pgtype.Text{String: errMessage, Valid: errMessage != ""},
+		LatencyMs:    latency,
+	})
+	if err != nil {
+		log.Printf("%s: fail request write failed gen_id=%d status=%s err=%v", flow, genID, status, err)
+		return
+	}
+	if rows == 0 {
+		log.Printf("%s: fail request skipped terminal-state gen_id=%d status=%s", flow, genID, status)
+	}
+}
+
+func (r *Router) getOrCreateGenerationRequest(
+	ctx context.Context,
+	params db.InsertGenerationRequestParams,
+	updateID int64,
+) (db.GenerationRequest, bool, error) {
+	if updateID > 0 {
+		existing, err := r.Q.GetGenerationRequestByUpdateID(ctx, toInt8(updateID))
+		if err == nil {
+			return existing, false, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return db.GenerationRequest{}, false, err
+		}
+	}
+
+	gr, err := r.Q.InsertGenerationRequest(ctx, params)
+	if err == nil {
+		return gr, true, nil
+	}
+	if updateID > 0 && isUniqueViolation(err) {
+		existing, gerr := r.Q.GetGenerationRequestByUpdateID(ctx, toInt8(updateID))
+		if gerr == nil {
+			return existing, false, nil
+		}
+		if !errors.Is(gerr, pgx.ErrNoRows) {
+			return db.GenerationRequest{}, false, gerr
+		}
+	}
+	return db.GenerationRequest{}, false, err
+}
+
+func generationRequestStatus(status interface{}) string {
+	if s, ok := status.(string); ok {
+		return s
+	}
+	return fmt.Sprint(status)
+}
+
+func isTerminalGenerationRequestStatus(status string) bool {
+	switch status {
+	case "ok", "failed", "failed_balance", "failed_queue":
+		return true
+	default:
+		return false
+	}
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == "23505"
+}
+
+func toInt8(v int64) pgtype.Int8 {
+	return pgtype.Int8{Int64: v, Valid: v > 0}
 }
 
 func kindToRus(kind string) string {

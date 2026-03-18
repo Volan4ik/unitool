@@ -112,7 +112,7 @@ func (r *Router) handleAdminTextInput(ctx context.Context, m *tgbotapi.Message, 
 	}
 	switch state.Action {
 	case adminActionPkgAdd:
-		in, err := parsePackageInput(txt, false)
+		in, err := parsePackageInput(txt)
 		if err != nil {
 			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Формат: code|name|price|currency|attempts_text|attempts_image|attempts_video|is_active"))
 			return true, nil
@@ -373,51 +373,43 @@ func parsePackageEditInput(raw string) (int64, admin.PackageInput, error) {
 	if err != nil {
 		return 0, admin.PackageInput{}, err
 	}
-	in, err := parsePackageInput(strings.Join(parts[1:], "|"), false)
+	in, err := parsePackageInput(strings.Join(parts[1:], "|"))
 	if err != nil {
 		return 0, admin.PackageInput{}, err
 	}
 	return id, in, nil
 }
 
-func parsePackageInput(raw string, withID bool) (admin.PackageInput, error) {
-	expected := 8
-	if withID {
-		expected = 9
-	}
-	parts := splitInput(raw, expected)
-	if len(parts) != expected {
+func parsePackageInput(raw string) (admin.PackageInput, error) {
+	parts := splitInput(raw, 8)
+	if len(parts) != 8 {
 		return admin.PackageInput{}, fmt.Errorf("bad input")
 	}
-	offset := 0
-	if withID {
-		offset = 1
-	}
-	price, err := strconv.ParseInt(parts[offset+2], 10, 32)
+	price, err := strconv.ParseInt(parts[2], 10, 32)
 	if err != nil {
 		return admin.PackageInput{}, err
 	}
-	txt, err := strconv.ParseInt(parts[offset+4], 10, 32)
+	txt, err := strconv.ParseInt(parts[4], 10, 32)
 	if err != nil {
 		return admin.PackageInput{}, err
 	}
-	img, err := strconv.ParseInt(parts[offset+5], 10, 32)
+	img, err := strconv.ParseInt(parts[5], 10, 32)
 	if err != nil {
 		return admin.PackageInput{}, err
 	}
-	vid, err := strconv.ParseInt(parts[offset+6], 10, 32)
+	vid, err := strconv.ParseInt(parts[6], 10, 32)
 	if err != nil {
 		return admin.PackageInput{}, err
 	}
-	active, err := parseBool(parts[offset+7])
+	active, err := parseBool(parts[7])
 	if err != nil {
 		return admin.PackageInput{}, err
 	}
 	return admin.PackageInput{
-		Code:          parts[offset],
-		Name:          parts[offset+1],
+		Code:          parts[0],
+		Name:          parts[1],
 		PriceRub:      int32(price),
-		Currency:      parts[offset+3],
+		Currency:      parts[3],
 		AttemptsText:  int32(txt),
 		AttemptsImage: int32(img),
 		AttemptsVideo: int32(vid),

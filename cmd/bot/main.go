@@ -36,6 +36,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const webhookUpdateTimeout = 15 * time.Second
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -228,7 +230,9 @@ func main() {
 					jobErr = fmt.Errorf("panic while handling update_id=%d: %v", updateID, rcv)
 				}
 			}()
-			if err := router.HandleUpdate(ctx, *upd); err != nil {
+			updateCtx, updateCancel := context.WithTimeout(ctx, webhookUpdateTimeout)
+			defer updateCancel()
+			if err := router.HandleUpdate(updateCtx, *upd); err != nil {
 				jobErr = fmt.Errorf("handle update failed: %w", err)
 				markFailed(jobErr.Error())
 				return
@@ -236,15 +240,18 @@ func main() {
 			if updateID > 0 {
 				doneCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				doneRows, err := queries.MarkUpdateDone(doneCtx, updateID)
-				cancel()
 				if err != nil {
+					cancel()
 					jobErr = fmt.Errorf("mark update done failed: %w", err)
 					markFailed(jobErr.Error())
 					return
 				}
 				if doneRows == 0 {
 					jobErr = fmt.Errorf("mark update done affected 0 rows")
-					row, gerr := queries.GetTelegramUpdateByID(doneCtx, updateID)
+					cancel()
+					diagCtx, diagCancel := context.WithTimeout(context.Background(), 3*time.Second)
+					row, gerr := queries.GetTelegramUpdateByID(diagCtx, updateID)
+					diagCancel()
 					if gerr != nil {
 						logg.Warn().
 							Int64("update_id", updateID).
@@ -261,6 +268,7 @@ func main() {
 					markFailed(jobErr.Error())
 					return
 				}
+				cancel()
 			}
 			return nil
 		}) {
@@ -280,7 +288,9 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 	})
-	healthSrv.Start(ctx)
+	if err := healthSrv.Start(ctx); err != nil {
+		logg.Fatal().Err(err).Msg("health server start")
+	}
 
 	if err := bot.SetWebhook(webhookURLStr, webhookSecret); err != nil {
 		logg.Fatal().Err(err).Msg("set webhook")
