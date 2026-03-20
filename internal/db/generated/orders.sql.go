@@ -16,7 +16,7 @@ INSERT INTO orders (id, user_id, package_id, amount_rub, status, buyer_email, pr
 VALUES ($1,$2,$3,$4,'created',$5,$6)
 RETURNING id, user_id, package_id, amount_rub, currency,
           status::text AS status,
-          tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
+          tg_payment_charge_id, provider_payment_charge_id,
           buyer_email, provider_data, created_at, paid_at
 `
 
@@ -36,7 +36,6 @@ type CreateOrderRow struct {
 	AmountRub               int32              `json:"amount_rub"`
 	Currency                string             `json:"currency"`
 	Status                  string             `json:"status"`
-	TgInvoiceMsgID          pgtype.Int8        `json:"tg_invoice_msg_id"`
 	TgPaymentChargeID       pgtype.Text        `json:"tg_payment_charge_id"`
 	ProviderPaymentChargeID pgtype.Text        `json:"provider_payment_charge_id"`
 	BuyerEmail              pgtype.Text        `json:"buyer_email"`
@@ -62,7 +61,6 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Creat
 		&i.AmountRub,
 		&i.Currency,
 		&i.Status,
-		&i.TgInvoiceMsgID,
 		&i.TgPaymentChargeID,
 		&i.ProviderPaymentChargeID,
 		&i.BuyerEmail,
@@ -76,7 +74,7 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Creat
 const getOrderByID = `-- name: GetOrderByID :one
 SELECT id, user_id, package_id, amount_rub, currency,
        status::text AS status,
-       tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
+       tg_payment_charge_id, provider_payment_charge_id,
        buyer_email, provider_data, created_at, paid_at
 FROM orders WHERE id = $1
 `
@@ -88,7 +86,6 @@ type GetOrderByIDRow struct {
 	AmountRub               int32              `json:"amount_rub"`
 	Currency                string             `json:"currency"`
 	Status                  string             `json:"status"`
-	TgInvoiceMsgID          pgtype.Int8        `json:"tg_invoice_msg_id"`
 	TgPaymentChargeID       pgtype.Text        `json:"tg_payment_charge_id"`
 	ProviderPaymentChargeID pgtype.Text        `json:"provider_payment_charge_id"`
 	BuyerEmail              pgtype.Text        `json:"buyer_email"`
@@ -107,7 +104,6 @@ func (q *Queries) GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByI
 		&i.AmountRub,
 		&i.Currency,
 		&i.Status,
-		&i.TgInvoiceMsgID,
 		&i.TgPaymentChargeID,
 		&i.ProviderPaymentChargeID,
 		&i.BuyerEmail,

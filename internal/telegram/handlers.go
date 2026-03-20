@@ -253,15 +253,12 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 
 	updateID := updateIDFromContext(ctx)
 	gr, created, err := r.getOrCreateGenerationRequest(ctx, db.InsertGenerationRequestParams{
-		UserID:       userID,
-		UpdateID:     toInt8(updateID),
-		Column3:      kind,
-		Provider:     providerName,
-		Model:        modelID,
-		Column9:      "running",
-		RequestIDExt: pgtype.Text{},
-		PromptHash:   pgtype.Text{},
-		InputTokens:  pgtype.Int4{},
+		UserID:   userID,
+		UpdateID: toInt8(updateID),
+		Column3:  kind,
+		Provider: providerName,
+		Model:    modelID,
+		Column6:  "running",
 	}, updateID)
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Внутренняя ошибка. Попробуйте позже."))
@@ -466,15 +463,12 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 
 	updateID := updateIDFromContext(ctx)
 	gr, created, err := r.getOrCreateGenerationRequest(ctx, db.InsertGenerationRequestParams{
-		UserID:       userID,
-		UpdateID:     toInt8(updateID),
-		Column3:      kind,
-		Provider:     providerName,
-		Model:        modelID,
-		Column9:      "queued",
-		RequestIDExt: pgtype.Text{},
-		PromptHash:   pgtype.Text{},
-		InputTokens:  pgtype.Int4{},
+		UserID:   userID,
+		UpdateID: toInt8(updateID),
+		Column3:  kind,
+		Provider: providerName,
+		Model:    modelID,
+		Column6:  "queued",
 	}, updateID)
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Внутренняя ошибка. Попробуйте позже."))

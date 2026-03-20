@@ -141,7 +141,12 @@ func (q *Queries) GetLastPaidPackageByUser(ctx context.Context, userID int64) (G
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, is_banned, banned_at, banned_reason, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at FROM users WHERE id = $1
+SELECT id, tg_id, username, first_name, last_name, lang_code,
+       is_banned, banned_at, banned_reason,
+       text_balance, image_balance, video_balance,
+       created_at, updated_at
+FROM users
+WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
@@ -154,12 +159,9 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 		&i.FirstName,
 		&i.LastName,
 		&i.LangCode,
-		&i.Email,
-		&i.IsAdmin,
 		&i.IsBanned,
 		&i.BannedAt,
 		&i.BannedReason,
-		&i.MediaAgreed,
 		&i.TextBalance,
 		&i.ImageBalance,
 		&i.VideoBalance,
@@ -170,7 +172,12 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (User, error) {
 }
 
 const getUserByTGID = `-- name: GetUserByTGID :one
-SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, is_banned, banned_at, banned_reason, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at FROM users WHERE tg_id = $1
+SELECT id, tg_id, username, first_name, last_name, lang_code,
+       is_banned, banned_at, banned_reason,
+       text_balance, image_balance, video_balance,
+       created_at, updated_at
+FROM users
+WHERE tg_id = $1
 `
 
 func (q *Queries) GetUserByTGID(ctx context.Context, tgID int64) (User, error) {
@@ -183,12 +190,9 @@ func (q *Queries) GetUserByTGID(ctx context.Context, tgID int64) (User, error) {
 		&i.FirstName,
 		&i.LastName,
 		&i.LangCode,
-		&i.Email,
-		&i.IsAdmin,
 		&i.IsBanned,
 		&i.BannedAt,
 		&i.BannedReason,
-		&i.MediaAgreed,
 		&i.TextBalance,
 		&i.ImageBalance,
 		&i.VideoBalance,
@@ -199,7 +203,10 @@ func (q *Queries) GetUserByTGID(ctx context.Context, tgID int64) (User, error) {
 }
 
 const searchUsersByUsername = `-- name: SearchUsersByUsername :many
-SELECT id, tg_id, username, first_name, last_name, lang_code, email, is_admin, is_banned, banned_at, banned_reason, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at
+SELECT id, tg_id, username, first_name, last_name, lang_code,
+       is_banned, banned_at, banned_reason,
+       text_balance, image_balance, video_balance,
+       created_at, updated_at
 FROM users
 WHERE username ILIKE $1
 ORDER BY id DESC
@@ -227,12 +234,9 @@ func (q *Queries) SearchUsersByUsername(ctx context.Context, arg SearchUsersByUs
 			&i.FirstName,
 			&i.LastName,
 			&i.LangCode,
-			&i.Email,
-			&i.IsAdmin,
 			&i.IsBanned,
 			&i.BannedAt,
 			&i.BannedReason,
-			&i.MediaAgreed,
 			&i.TextBalance,
 			&i.ImageBalance,
 			&i.VideoBalance,
@@ -326,7 +330,10 @@ ON CONFLICT (tg_id) DO UPDATE SET
     last_name = EXCLUDED.last_name,
     lang_code = EXCLUDED.lang_code,
     updated_at = now()
-RETURNING id, tg_id, username, first_name, last_name, lang_code, email, is_admin, is_banned, banned_at, banned_reason, media_agreed, text_balance, image_balance, video_balance, created_at, updated_at
+RETURNING id, tg_id, username, first_name, last_name, lang_code,
+          is_banned, banned_at, banned_reason,
+          text_balance, image_balance, video_balance,
+          created_at, updated_at
 `
 
 type UpsertUserByTGIDParams struct {
@@ -353,12 +360,9 @@ func (q *Queries) UpsertUserByTGID(ctx context.Context, arg UpsertUserByTGIDPara
 		&i.FirstName,
 		&i.LastName,
 		&i.LangCode,
-		&i.Email,
-		&i.IsAdmin,
 		&i.IsBanned,
 		&i.BannedAt,
 		&i.BannedReason,
-		&i.MediaAgreed,
 		&i.TextBalance,
 		&i.ImageBalance,
 		&i.VideoBalance,

@@ -66,9 +66,6 @@ type GenerationRequest struct {
 	Kind             interface{}        `json:"kind"`
 	Provider         string             `json:"provider"`
 	Model            string             `json:"model"`
-	RequestIDExt     pgtype.Text        `json:"request_id_ext"`
-	PromptHash       pgtype.Text        `json:"prompt_hash"`
-	InputTokens      pgtype.Int4        `json:"input_tokens"`
 	OutputTokens     pgtype.Int4        `json:"output_tokens"`
 	CostCreditsText  pgtype.Int4        `json:"cost_credits_text"`
 	CostCreditsImage pgtype.Int4        `json:"cost_credits_image"`
@@ -87,7 +84,6 @@ type Order struct {
 	AmountRub               int32              `json:"amount_rub"`
 	Currency                string             `json:"currency"`
 	Status                  interface{}        `json:"status"`
-	TgInvoiceMsgID          pgtype.Int8        `json:"tg_invoice_msg_id"`
 	TgPaymentChargeID       pgtype.Text        `json:"tg_payment_charge_id"`
 	ProviderPaymentChargeID pgtype.Text        `json:"provider_payment_charge_id"`
 	BuyerEmail              pgtype.Text        `json:"buyer_email"`
@@ -128,12 +124,9 @@ type User struct {
 	FirstName    pgtype.Text        `json:"first_name"`
 	LastName     pgtype.Text        `json:"last_name"`
 	LangCode     pgtype.Text        `json:"lang_code"`
-	Email        pgtype.Text        `json:"email"`
-	IsAdmin      bool               `json:"is_admin"`
 	IsBanned     bool               `json:"is_banned"`
 	BannedAt     pgtype.Timestamptz `json:"banned_at"`
 	BannedReason pgtype.Text        `json:"banned_reason"`
-	MediaAgreed  bool               `json:"media_agreed"`
 	TextBalance  int32              `json:"text_balance"`
 	ImageBalance int32              `json:"image_balance"`
 	VideoBalance int32              `json:"video_balance"`
@@ -155,27 +148,4 @@ type UserSession struct {
 	Model     string             `json:"model"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-}
-
-type VOrderBrief struct {
-	ID                      pgtype.UUID        `json:"id"`
-	UserID                  int64              `json:"user_id"`
-	PackageID               int64              `json:"package_id"`
-	PackageCode             string             `json:"package_code"`
-	AmountRub               int32              `json:"amount_rub"`
-	Status                  interface{}        `json:"status"`
-	ProviderPaymentChargeID pgtype.Text        `json:"provider_payment_charge_id"`
-	CreatedAt               pgtype.Timestamptz `json:"created_at"`
-	PaidAt                  pgtype.Timestamptz `json:"paid_at"`
-}
-
-type VUserBalance struct {
-	ID           int64              `json:"id"`
-	TgID         int64              `json:"tg_id"`
-	Username     pgtype.Text        `json:"username"`
-	TextBalance  int32              `json:"text_balance"`
-	ImageBalance int32              `json:"image_balance"`
-	VideoBalance int32              `json:"video_balance"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }

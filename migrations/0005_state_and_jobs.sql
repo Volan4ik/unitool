@@ -27,7 +27,7 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE IF NOT EXISTS generation_jobs (
   id                     BIGSERIAL PRIMARY KEY,
-  generation_request_id  BIGINT NOT NULL UNIQUE REFERENCES generation_requests(id) ON DELETE CASCADE,
+  generation_request_id  BIGINT NOT NULL REFERENCES generation_requests(id) ON DELETE CASCADE,
   user_id                BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   chat_id                BIGINT NOT NULL,
   conversation_id        uuid NOT NULL,
@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_gen_jobs_status_next ON generation_jobs(status, next_attempt_at, id);
 CREATE INDEX IF NOT EXISTS idx_gen_jobs_user ON generation_jobs(user_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_generation_jobs_request_id ON generation_jobs(generation_request_id);
 
 DROP TRIGGER IF EXISTS trg_generation_jobs_set_updated ON generation_jobs;
 CREATE TRIGGER trg_generation_jobs_set_updated

@@ -7,19 +7,35 @@ ON CONFLICT (tg_id) DO UPDATE SET
     last_name = EXCLUDED.last_name,
     lang_code = EXCLUDED.lang_code,
     updated_at = now()
-RETURNING *;
+RETURNING id, tg_id, username, first_name, last_name, lang_code,
+          is_banned, banned_at, banned_reason,
+          text_balance, image_balance, video_balance,
+          created_at, updated_at;
 
 -- name: GetUserByTGID :one
-SELECT * FROM users WHERE tg_id = $1;
+SELECT id, tg_id, username, first_name, last_name, lang_code,
+       is_banned, banned_at, banned_reason,
+       text_balance, image_balance, video_balance,
+       created_at, updated_at
+FROM users
+WHERE tg_id = $1;
 
 -- name: GetBalancesByUserID :one
 SELECT text_balance, image_balance, video_balance FROM users WHERE id = $1;
 
 -- name: GetUserByID :one
-SELECT * FROM users WHERE id = $1;
+SELECT id, tg_id, username, first_name, last_name, lang_code,
+       is_banned, banned_at, banned_reason,
+       text_balance, image_balance, video_balance,
+       created_at, updated_at
+FROM users
+WHERE id = $1;
 
 -- name: SearchUsersByUsername :many
-SELECT *
+SELECT id, tg_id, username, first_name, last_name, lang_code,
+       is_banned, banned_at, banned_reason,
+       text_balance, image_balance, video_balance,
+       created_at, updated_at
 FROM users
 WHERE username ILIKE $1
 ORDER BY id DESC

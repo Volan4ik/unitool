@@ -79,7 +79,9 @@ func (q *Queries) FinishGenerationRequest(ctx context.Context, arg FinishGenerat
 }
 
 const getGenerationRequestByUpdateID = `-- name: GetGenerationRequestByUpdateID :one
-SELECT id, user_id, update_id, kind, provider, model, request_id_ext, prompt_hash, input_tokens, output_tokens, cost_credits_text, cost_credits_image, cost_credits_video, status, error_message, latency_ms, created_at, finished_at
+SELECT id, user_id, update_id, kind, provider, model,
+       output_tokens, cost_credits_text, cost_credits_image, cost_credits_video,
+       status, error_message, latency_ms, created_at, finished_at
 FROM generation_requests
 WHERE update_id = $1
 `
@@ -94,9 +96,6 @@ func (q *Queries) GetGenerationRequestByUpdateID(ctx context.Context, updateID p
 		&i.Kind,
 		&i.Provider,
 		&i.Model,
-		&i.RequestIDExt,
-		&i.PromptHash,
-		&i.InputTokens,
 		&i.OutputTokens,
 		&i.CostCreditsText,
 		&i.CostCreditsImage,
@@ -112,23 +111,21 @@ func (q *Queries) GetGenerationRequestByUpdateID(ctx context.Context, updateID p
 
 const insertGenerationRequest = `-- name: InsertGenerationRequest :one
 INSERT INTO generation_requests (
-  user_id, update_id, kind, provider, model, request_id_ext, prompt_hash,
-  input_tokens, status, created_at
+  user_id, update_id, kind, provider, model, status, created_at
 ) VALUES (
-  $1,$2,$3::gen_type,$4,$5,$6,$7,$8,$9::gen_request_status, now()
-) RETURNING id, user_id, update_id, kind, provider, model, request_id_ext, prompt_hash, input_tokens, output_tokens, cost_credits_text, cost_credits_image, cost_credits_video, status, error_message, latency_ms, created_at, finished_at
+  $1,$2,$3::gen_type,$4,$5,$6::gen_request_status, now()
+) RETURNING id, user_id, update_id, kind, provider, model,
+            output_tokens, cost_credits_text, cost_credits_image, cost_credits_video,
+            status, error_message, latency_ms, created_at, finished_at
 `
 
 type InsertGenerationRequestParams struct {
-	UserID       int64       `json:"user_id"`
-	UpdateID     pgtype.Int8 `json:"update_id"`
-	Column3      interface{} `json:"column_3"`
-	Provider     string      `json:"provider"`
-	Model        string      `json:"model"`
-	RequestIDExt pgtype.Text `json:"request_id_ext"`
-	PromptHash   pgtype.Text `json:"prompt_hash"`
-	InputTokens  pgtype.Int4 `json:"input_tokens"`
-	Column9      interface{} `json:"column_9"`
+	UserID   int64       `json:"user_id"`
+	UpdateID pgtype.Int8 `json:"update_id"`
+	Column3  interface{} `json:"column_3"`
+	Provider string      `json:"provider"`
+	Model    string      `json:"model"`
+	Column6  interface{} `json:"column_6"`
 }
 
 func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerationRequestParams) (GenerationRequest, error) {
@@ -138,10 +135,7 @@ func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerat
 		arg.Column3,
 		arg.Provider,
 		arg.Model,
-		arg.RequestIDExt,
-		arg.PromptHash,
-		arg.InputTokens,
-		arg.Column9,
+		arg.Column6,
 	)
 	var i GenerationRequest
 	err := row.Scan(
@@ -151,9 +145,6 @@ func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerat
 		&i.Kind,
 		&i.Provider,
 		&i.Model,
-		&i.RequestIDExt,
-		&i.PromptHash,
-		&i.InputTokens,
 		&i.OutputTokens,
 		&i.CostCreditsText,
 		&i.CostCreditsImage,

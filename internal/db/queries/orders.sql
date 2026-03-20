@@ -3,7 +3,7 @@ INSERT INTO orders (id, user_id, package_id, amount_rub, status, buyer_email, pr
 VALUES ($1,$2,$3,$4,'created',$5,$6)
 RETURNING id, user_id, package_id, amount_rub, currency,
           status::text AS status,
-          tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
+          tg_payment_charge_id, provider_payment_charge_id,
           buyer_email, provider_data, created_at, paid_at;
 
 -- name: MarkOrderPrecheckout :execrows
@@ -31,6 +31,6 @@ RETURNING id;
 -- name: GetOrderByID :one
 SELECT id, user_id, package_id, amount_rub, currency,
        status::text AS status,
-       tg_invoice_msg_id, tg_payment_charge_id, provider_payment_charge_id,
+       tg_payment_charge_id, provider_payment_charge_id,
        buyer_email, provider_data, created_at, paid_at
 FROM orders WHERE id = $1;

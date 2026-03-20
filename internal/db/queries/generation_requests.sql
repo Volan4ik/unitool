@@ -1,13 +1,16 @@
 -- name: InsertGenerationRequest :one
 INSERT INTO generation_requests (
-  user_id, update_id, kind, provider, model, request_id_ext, prompt_hash,
-  input_tokens, status, created_at
+  user_id, update_id, kind, provider, model, status, created_at
 ) VALUES (
-  $1,$2,$3::gen_type,$4,$5,$6,$7,$8,$9::gen_request_status, now()
-) RETURNING *;
+  $1,$2,$3::gen_type,$4,$5,$6::gen_request_status, now()
+) RETURNING id, user_id, update_id, kind, provider, model,
+            output_tokens, cost_credits_text, cost_credits_image, cost_credits_video,
+            status, error_message, latency_ms, created_at, finished_at;
 
 -- name: GetGenerationRequestByUpdateID :one
-SELECT *
+SELECT id, user_id, update_id, kind, provider, model,
+       output_tokens, cost_credits_text, cost_credits_image, cost_credits_video,
+       status, error_message, latency_ms, created_at, finished_at
 FROM generation_requests
 WHERE update_id = $1;
 

@@ -45,12 +45,9 @@ CREATE TABLE IF NOT EXISTS users (
   first_name     text,
   last_name      text,
   lang_code      text,
-  email          citext,
-  is_admin       boolean NOT NULL DEFAULT false,
   is_banned      boolean NOT NULL DEFAULT false,
   banned_at      timestamptz,
   banned_reason  text,
-  media_agreed   boolean NOT NULL DEFAULT false,
   text_balance   integer NOT NULL DEFAULT 0 CHECK (text_balance >= 0),
   image_balance  integer NOT NULL DEFAULT 0 CHECK (image_balance >= 0),
   video_balance  integer NOT NULL DEFAULT 0 CHECK (video_balance >= 0),
@@ -59,8 +56,6 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_tg_id ON users(tg_id);
-CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users(is_admin);
 CREATE INDEX IF NOT EXISTS idx_users_is_banned ON users(is_banned);
 
 DROP TRIGGER IF EXISTS trg_users_set_updated ON users;
@@ -94,7 +89,6 @@ CREATE TABLE IF NOT EXISTS orders (
   amount_rub                     integer NOT NULL CHECK (amount_rub >= 0),
   currency                       text NOT NULL DEFAULT 'RUB',
   status                         order_status NOT NULL,
-  tg_invoice_msg_id              BIGINT,
   tg_payment_charge_id           text,         -- TelegramPaymentChargeId
   provider_payment_charge_id     text,         -- из YooKassa (сверка)
   buyer_email                    citext,
@@ -105,8 +99,6 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at);
-CREATE INDEX IF NOT EXISTS idx_orders_provider_charge ON orders(provider_payment_charge_id);
 
 CREATE TABLE IF NOT EXISTS telegram_updates (
   update_id              BIGINT PRIMARY KEY,
@@ -141,7 +133,6 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON credit_ledger(user_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_ledger_reason ON credit_ledger(reason, created_at);
 
 CREATE OR REPLACE FUNCTION apply_ledger_to_balances()
 RETURNS trigger AS $$
@@ -184,13 +175,10 @@ EXECUTE FUNCTION prevent_negative_balances();
 CREATE TABLE IF NOT EXISTS generation_requests (
   id                   BIGSERIAL PRIMARY KEY,
   user_id              BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  update_id            BIGINT UNIQUE,
+  update_id            BIGINT,
   kind                 gen_type NOT NULL,
   provider             text NOT NULL,
   model                text NOT NULL,
-  request_id_ext       text,
-  prompt_hash          text,
-  input_tokens         integer CHECK (input_tokens IS NULL OR input_tokens >= 0),
   output_tokens        integer CHECK (output_tokens IS NULL OR output_tokens >= 0),
   cost_credits_text    integer DEFAULT 0 CHECK (cost_credits_text >= 0),
   cost_credits_image   integer DEFAULT 0 CHECK (cost_credits_image >= 0),
@@ -208,29 +196,3 @@ CREATE INDEX IF NOT EXISTS idx_gen_provider_model ON generation_requests(provide
 CREATE UNIQUE INDEX IF NOT EXISTS uq_generation_requests_update_id
   ON generation_requests(update_id)
   WHERE update_id IS NOT NULL;
-
-CREATE OR REPLACE VIEW v_user_balances AS
-SELECT
-  u.id,
-  u.tg_id,
-  u.username,
-  u.text_balance,
-  u.image_balance,
-  u.video_balance,
-  u.created_at,
-  u.updated_at
-FROM users u;
-
-CREATE OR REPLACE VIEW v_order_brief AS
-SELECT
-  o.id,
-  o.user_id,
-  o.package_id,
-  p.code AS package_code,
-  o.amount_rub,
-  o.status,
-  o.provider_payment_charge_id,
-  o.created_at,
-  o.paid_at
-FROM orders o
-JOIN packages p ON p.id = o.package_id;
