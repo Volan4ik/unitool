@@ -149,6 +149,27 @@ func TestIsHTTPURL(t *testing.T) {
 	}
 }
 
+func TestShouldDownloadVideoFirst(t *testing.T) {
+	if !shouldDownloadVideoFirst("https://api.cometapi.com/v1/videos/task_1/content") {
+		t.Fatal("expected comet content URL to be pre-downloaded")
+	}
+	if shouldDownloadVideoFirst("https://cdn.example.com/video.mp4") {
+		t.Fatal("did not expect non-comet URL to be pre-downloaded")
+	}
+	if shouldDownloadVideoFirst("not-a-url") {
+		t.Fatal("did not expect invalid URL to be pre-downloaded")
+	}
+}
+
+func stubDownloadMedia(t *testing.T, fn func(context.Context, string) ([]byte, string, error)) {
+	t.Helper()
+	prev := downloadMediaFn
+	downloadMediaFn = fn
+	t.Cleanup(func() {
+		downloadMediaFn = prev
+	})
+}
+
 func TestSendMediaResultImageSuccess(t *testing.T) {
 	fake := newFakeTelegramAPI()
 	svc := &Service{Bot: newTestBot(t, fake)}
@@ -171,6 +192,7 @@ func TestSendMediaResultImageSuccess(t *testing.T) {
 func TestSendMediaResultRetryThenSuccess(t *testing.T) {
 	fake := newFakeTelegramAPI()
 	fake.setFailFirst("sendVideo", 1)
+	fake.setFailFirst("sendDocument", 1)
 	svc := &Service{Bot: newTestBot(t, fake)}
 
 	svc.sendMediaResult(context.Background(), db.GenerationJob{
@@ -182,6 +204,32 @@ func TestSendMediaResultRetryThenSuccess(t *testing.T) {
 
 	if got := fake.callCount("sendVideo"); got != 2 {
 		t.Fatalf("expected sendVideo=2 (retry), got %d", got)
+	}
+	if got := fake.callCount("sendDocument"); got != 1 {
+		t.Fatalf("expected sendDocument=1 (fallback probe), got %d", got)
+	}
+	if got := fake.callCount("sendMessage"); got != 0 {
+		t.Fatalf("expected no text fallback, got sendMessage=%d", got)
+	}
+}
+
+func TestSendMediaResultVideoSentAsDocumentFallback(t *testing.T) {
+	fake := newFakeTelegramAPI()
+	fake.setFailFirst("sendVideo", 1)
+	svc := &Service{Bot: newTestBot(t, fake)}
+
+	svc.sendMediaResult(context.Background(), db.GenerationJob{
+		ID:     16,
+		UserID: 106,
+		ChatID: 1006,
+		Kind:   "video",
+	}, "https://cdn.example.com/vid.bin")
+
+	if got := fake.callCount("sendVideo"); got != 1 {
+		t.Fatalf("expected sendVideo=1, got %d", got)
+	}
+	if got := fake.callCount("sendDocument"); got != 1 {
+		t.Fatalf("expected sendDocument=1, got %d", got)
 	}
 	if got := fake.callCount("sendMessage"); got != 0 {
 		t.Fatalf("expected no text fallback, got sendMessage=%d", got)
@@ -205,8 +253,49 @@ func TestSendMediaResultFallbackInvalidURL(t *testing.T) {
 	if got := fake.callCount("sendMessage"); got != 1 {
 		t.Fatalf("expected sendMessage=1, got %d", got)
 	}
-	if txt := fake.lastText(); !strings.Contains(txt, "некорректна") {
+	if txt := fake.lastText(); !strings.Contains(txt, "не удалось обработать ссылку") {
 		t.Fatalf("expected invalid-url fallback text, got %q", txt)
+	}
+}
+
+func TestSendMediaResultInlineDataImageSuccess(t *testing.T) {
+	fake := newFakeTelegramAPI()
+	svc := &Service{Bot: newTestBot(t, fake)}
+
+	svc.sendMediaResult(context.Background(), db.GenerationJob{
+		ID:     14,
+		UserID: 104,
+		ChatID: 1004,
+		Kind:   "image",
+	}, "![image](data:image/png;base64,aGVsbG8=)")
+
+	if got := fake.callCount("sendPhoto"); got != 1 {
+		t.Fatalf("expected sendPhoto=1 for inline image, got %d", got)
+	}
+	if got := fake.callCount("sendMessage"); got != 0 {
+		t.Fatalf("expected sendMessage=0 for inline image, got %d", got)
+	}
+}
+
+func TestSendMediaResultInlineDataImageDecodeFallback(t *testing.T) {
+	fake := newFakeTelegramAPI()
+	svc := &Service{Bot: newTestBot(t, fake)}
+
+	svc.sendMediaResult(context.Background(), db.GenerationJob{
+		ID:     15,
+		UserID: 105,
+		ChatID: 1005,
+		Kind:   "image",
+	}, "data:image/png;base64,%%%")
+
+	if got := fake.callCount("sendPhoto"); got != 0 {
+		t.Fatalf("expected sendPhoto=0 for broken inline image, got %d", got)
+	}
+	if got := fake.callCount("sendMessage"); got != 1 {
+		t.Fatalf("expected sendMessage=1 for broken inline image, got %d", got)
+	}
+	if txt := fake.lastText(); !strings.Contains(txt, "встроенное изображение") {
+		t.Fatalf("expected inline-image fallback text, got %q", txt)
 	}
 }
 
@@ -229,6 +318,58 @@ func TestSendMediaResultFallbackEmptyOutput(t *testing.T) {
 	}
 	if txt := fake.lastText(); !strings.Contains(txt, "не вернул ссылку") {
 		t.Fatalf("expected empty-output fallback text, got %q", txt)
+	}
+}
+
+func TestSendMediaResultNoRawLinkLeakOnFailure(t *testing.T) {
+	fake := newFakeTelegramAPI()
+	fake.setFailFirst("sendVideo", 3)
+	fake.setFailFirst("sendDocument", 3)
+	svc := &Service{Bot: newTestBot(t, fake)}
+	stubDownloadMedia(t, func(context.Context, string) ([]byte, string, error) {
+		return nil, "", errors.New("download failed")
+	})
+
+	leakyURL := "https://api.cometapi.com/v1/videos/task_abc/content"
+	svc.sendMediaResult(context.Background(), db.GenerationJob{
+		ID:     17,
+		UserID: 107,
+		ChatID: 1007,
+		Kind:   "video",
+	}, leakyURL)
+
+	if got := fake.callCount("sendMessage"); got != 1 {
+		t.Fatalf("expected sendMessage=1, got %d", got)
+	}
+	if txt := fake.lastText(); strings.Contains(txt, leakyURL) {
+		t.Fatalf("fallback text must not leak raw url, got %q", txt)
+	}
+}
+
+func TestSendMediaResultVideoDownloadedFallbackSuccess(t *testing.T) {
+	fake := newFakeTelegramAPI()
+	svc := &Service{Bot: newTestBot(t, fake)}
+	stubDownloadMedia(t, func(context.Context, string) ([]byte, string, error) {
+		return []byte("fake-video-bytes"), "video/mp4", nil
+	})
+
+	svc.sendMediaResult(context.Background(), db.GenerationJob{
+		ID:     18,
+		UserID: 108,
+		ChatID: 1008,
+		Kind:   "video",
+	}, "https://api.cometapi.com/v1/videos/task_abc/content")
+
+	// Comet content URLs should skip URL-send attempts and go straight to
+	// downloaded upload flow.
+	if got := fake.callCount("sendVideo"); got != 1 {
+		t.Fatalf("expected sendVideo=1 with pre-download flow, got %d", got)
+	}
+	if got := fake.callCount("sendDocument"); got != 0 {
+		t.Fatalf("expected sendDocument=0 with pre-download flow, got %d", got)
+	}
+	if got := fake.callCount("sendMessage"); got != 0 {
+		t.Fatalf("expected no text fallback on downloaded send success, got %d", got)
 	}
 }
 
@@ -338,16 +479,27 @@ func (f *fakeGenerationDBTX) QueryRow(_ context.Context, query string, _ ...inte
 }
 
 type fakeModelProvider struct {
+	mu   sync.Mutex
 	resp provider.ModelResponse
 	err  error
+	req  provider.ModelRequest
 }
 
-func (f *fakeModelProvider) Generate(context.Context, provider.ModelRequest) (provider.ModelResponse, error) {
+func (f *fakeModelProvider) Generate(_ context.Context, req provider.ModelRequest) (provider.ModelResponse, error) {
+	f.mu.Lock()
+	f.req = req
+	f.mu.Unlock()
 	return f.resp, f.err
 }
 
 func (f *fakeModelProvider) GenerateStream(context.Context, provider.ModelRequest, func(string) error) (provider.ModelResponse, error) {
 	return provider.ModelResponse{}, errors.New("not implemented")
+}
+
+func (f *fakeModelProvider) lastRequest() provider.ModelRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.req
 }
 
 func TestHandleFailedAttemptRequeueSuccess(t *testing.T) {
@@ -579,5 +731,66 @@ func TestProcessJobSuccessAfterGuardRunsSideEffects(t *testing.T) {
 	}
 	if got := fakeTG.callCount("sendPhoto"); got != 1 {
 		t.Fatalf("expected media send once, got sendPhoto=%d", got)
+	}
+}
+
+func TestSplitVideoPromptInputReference(t *testing.T) {
+	prompt, ref := splitVideoPromptInputReference("input_reference=https://cdn.example.com/ref.png\ncinematic shot")
+	if ref != "https://cdn.example.com/ref.png" {
+		t.Fatalf("unexpected input reference: %q", ref)
+	}
+	if prompt != "cinematic shot" {
+		t.Fatalf("unexpected prompt: %q", prompt)
+	}
+
+	prompt, ref = splitVideoPromptInputReference("cinematic shot\ninput_reference: https://cdn.example.com/ref2.png")
+	if ref != "https://cdn.example.com/ref2.png" {
+		t.Fatalf("unexpected input reference for colon syntax: %q", ref)
+	}
+	if prompt != "cinematic shot" {
+		t.Fatalf("unexpected prompt for trailing reference line: %q", prompt)
+	}
+
+	prompt, ref = splitVideoPromptInputReference("cinematic shot only")
+	if ref != "" {
+		t.Fatalf("did not expect input reference, got %q", ref)
+	}
+	if prompt != "cinematic shot only" {
+		t.Fatalf("unexpected prompt without reference: %q", prompt)
+	}
+}
+
+func TestProcessJobVideoPassesInputReferenceParam(t *testing.T) {
+	fakeTG := newFakeTelegramAPI()
+	fakeDB := &fakeGenerationDBTX{}
+	fakeProv := &fakeModelProvider{resp: provider.ModelResponse{Output: "https://cdn.example.com/out.mp4", Tokens: 9}}
+	svc := &Service{
+		Bot:        newTestBot(t, fakeTG),
+		Q:          db.New(fakeDB),
+		Prov:       fakeProv,
+		GenTimeout: 5 * time.Second,
+	}
+	job := db.GenerationJob{
+		ID:                  107,
+		GenerationRequestID: 207,
+		UserID:              307,
+		ChatID:              407,
+		Kind:                "video",
+		Model:               "kling",
+		Provider:            "comet",
+		Prompt:              "input_reference=https://cdn.example.com/ref.png\ncinematic drone shot",
+	}
+
+	svc.processJob(context.Background(), job)
+
+	req := fakeProv.lastRequest()
+	if req.Input != "cinematic drone shot" {
+		t.Fatalf("expected cleaned prompt, got %q", req.Input)
+	}
+	if got, _ := req.Params["kind"].(string); got != "video" {
+		t.Fatalf("expected kind=video, got %q", got)
+	}
+	if got, _ := req.Params["input_reference"].(string); got != "https://cdn.example.com/ref.png" {
+		t.Fatalf("expected input_reference to be passed, got %q", got)
 	}
 }

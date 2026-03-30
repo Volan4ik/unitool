@@ -18,6 +18,16 @@ SET status='failed'
 WHERE id=$1
   AND status IN ('created','precheckout_ok');
 
+-- name: MarkOrderManualReview :execrows
+UPDATE orders
+SET status='manual_review',
+    paid_at = COALESCE(paid_at, now()),
+    tg_payment_charge_id = COALESCE($2, tg_payment_charge_id),
+    provider_payment_charge_id = COALESCE($3, provider_payment_charge_id),
+    buyer_email = COALESCE($4, buyer_email)
+WHERE id=$1
+  AND status IN ('created','precheckout_ok');
+
 -- name: MarkOrderPaid :one
 UPDATE orders
 SET status='paid', paid_at=now(),

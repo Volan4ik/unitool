@@ -2,6 +2,7 @@ package comet
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -66,5 +67,73 @@ func TestPostJSONEmptyKey(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "api key is empty") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNormalizeVideoModel(t *testing.T) {
+	if got := normalizeVideoModel(""); got != "sora-2" {
+		t.Fatalf("expected default sora-2, got %q", got)
+	}
+	if got := normalizeVideoModel("Kling"); got != "kling" {
+		t.Fatalf("expected kling, got %q", got)
+	}
+	if got := normalizeVideoModel("Veo 3"); got != "veo3" {
+		t.Fatalf("expected veo3, got %q", got)
+	}
+	if !isSupportedVideoModel("kling") {
+		t.Fatal("expected kling to be supported")
+	}
+	if !isSupportedVideoModel("veo3") {
+		t.Fatal("expected veo3 to be supported")
+	}
+}
+
+func TestShouldUseImagesEndpoint(t *testing.T) {
+	if !shouldUseImagesEndpoint("imagen-3") {
+		t.Fatal("expected imagen-3 to use images endpoint")
+	}
+	if !shouldUseImagesEndpoint("IMAGEN-4-ultra") {
+		t.Fatal("expected imagen prefix check to be case-insensitive")
+	}
+	if shouldUseImagesEndpoint("gpt-4o-image") {
+		t.Fatal("did not expect gpt-4o-image to use images endpoint")
+	}
+	if shouldUseImagesEndpoint("gemini-3.1-flash-image-preview") {
+		t.Fatal("did not expect preview chat image model to use images endpoint")
+	}
+}
+
+func TestExtractFirstHTTPURL(t *testing.T) {
+	in := "Result: https://cdn.example.com/out.png, done"
+	if got := extractFirstHTTPURL(in); got != "https://cdn.example.com/out.png" {
+		t.Fatalf("unexpected extracted url: %q", got)
+	}
+	if got := extractFirstHTTPURL("no url here"); got != "" {
+		t.Fatalf("expected empty url, got %q", got)
+	}
+}
+
+func TestExtractMessageContentFromArrayShape(t *testing.T) {
+	raw := json.RawMessage(`[
+		{"type":"text","text":"Here is your image"},
+		{"type":"image_url","image_url":{"url":"https://cdn.example.com/generated.png"}}
+	]`)
+
+	text := extractMessageContentText(raw)
+	if !strings.Contains(text, "Here is your image") {
+		t.Fatalf("unexpected extracted text: %q", text)
+	}
+
+	url := extractMessageContentFirstURL(raw)
+	if url != "https://cdn.example.com/generated.png" {
+		t.Fatalf("unexpected extracted url: %q", url)
+	}
+}
+
+func TestExtractFirstImageReferenceDataURI(t *testing.T) {
+	in := "![image](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB)"
+	got := extractFirstImageReference(in)
+	if !strings.HasPrefix(got, "data:image/png;base64,") {
+		t.Fatalf("expected data uri, got %q", got)
 	}
 }

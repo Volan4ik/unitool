@@ -49,3 +49,32 @@ go test -count=1 ./...
 go test -race ./...
 
 - У тебя также есть shortcut в `Makefile` для генерации sqlc, но тесты запускаются напрямую через `go test`.
+
+для запуска: 
+`404 Not Found` от `api.telegram.org/bot...` почти всегда означает, что `TELEGRAM_TOKEN` сейчас пустой или некорректный в текущем shell.
+
+Проверь так:
+# 1) заново загрузить .env в текущий терминал
+set -a
+source .env
+set +a
+
+# 2) убедиться, что переменные реально есть
+echo "TOKEN len: ${#TELEGRAM_TOKEN}"
+echo "WEBHOOK_URL: $WEBHOOK_URL"
+echo "SECRET len: ${#WEBHOOK_SECRET_TOKEN}"
+
+# 3) быстрый тест токена
+curl "https://api.telegram.org/bot${TELEGRAM_TOKEN}/getMe"
+
+Ожидается `{"ok":true,...}`.  
+Если тут тоже `404`, токен неверный (или в нем мусор типа `\r`, лишний `bot`, пробелы).
+
+Потом ставь webhook:
+curl -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook" \
+  -d "url=${WEBHOOK_URL}" \
+  -d "secret_token=${WEBHOOK_SECRET_TOKEN}"
+
+curl "https://api.telegram.org/bot${TELEGRAM_TOKEN}/getWebhookInfo"
+
+Если хочешь, могу дать одну команду, которая сразу проверит и токен, и webhook URL, и покажет где именно ошибка

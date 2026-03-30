@@ -41,7 +41,7 @@ type Config struct {
 	WeeklyTextGenerations int    `envconfig:"WEEKLY_TEXT_GENERATIONS" default:"100"`
 	WeeklyCronAtUTC       string `envconfig:"WEEKLY_CRON_AT_UTC" default:"Mon 03:00"`
 	// OpenAI Moderation API
-	ModerationEnabled bool          `envconfig:"MODERATION_ENABLED" default:"true"`
+	ModerationEnabled bool          `envconfig:"MODERATION_ENABLED" default:"false"`
 	OpenAIBase        string        `envconfig:"OPENAI_API_BASE" default:"https://api.openai.com"`
 	OpenAIKey         string        `envconfig:"OPENAI_API_KEY" default:""`
 	ModerationModel   string        `envconfig:"MODERATION_MODEL" default:"omni-moderation-latest"`
@@ -49,9 +49,9 @@ type Config struct {
 	// Retention cleanup job
 	RetentionEnabled              bool   `envconfig:"RETENTION_ENABLED" default:"true"`
 	RetentionDailyAtUTC           string `envconfig:"RETENTION_DAILY_AT_UTC" default:"04:10"`
-	RetentionKeepChatDays         int    `envconfig:"RETENTION_KEEP_CHAT_DAYS" default:"180"`
-	RetentionKeepCreditLedgerDays int    `envconfig:"RETENTION_KEEP_CREDIT_LEDGER_DAYS" default:"730"`
-	RetentionKeepRequestDays      int    `envconfig:"RETENTION_KEEP_REQUEST_DAYS" default:"365"`
+	RetentionKeepChatDays         int    `envconfig:"RETENTION_KEEP_CHAT_DAYS" default:"60"`
+	RetentionKeepCreditLedgerDays int    `envconfig:"RETENTION_KEEP_CREDIT_LEDGER_DAYS" default:"1080"`
+	RetentionKeepRequestDays      int    `envconfig:"RETENTION_KEEP_REQUEST_DAYS" default:"60"`
 	RetentionKeepUpdatesDays      int    `envconfig:"RETENTION_KEEP_TELEGRAM_UPDATES_DAYS" default:"30"`
 	AdminIDs                      string `envconfig:"ADMIN_IDS" default:""`
 }

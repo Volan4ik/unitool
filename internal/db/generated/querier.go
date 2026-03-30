@@ -45,6 +45,7 @@ type Querier interface {
 	MarkGenerationJobDone(ctx context.Context, arg MarkGenerationJobDoneParams) (int64, error)
 	MarkGenerationJobFailed(ctx context.Context, arg MarkGenerationJobFailedParams) (int64, error)
 	MarkOrderFailed(ctx context.Context, id pgtype.UUID) (int64, error)
+	MarkOrderManualReview(ctx context.Context, arg MarkOrderManualReviewParams) (int64, error)
 	MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (pgtype.UUID, error)
 	MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) (int64, error)
 	MarkUpdateDone(ctx context.Context, updateID int64) (int64, error)

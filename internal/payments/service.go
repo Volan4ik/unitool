@@ -17,6 +17,10 @@ import (
 	db "unitool/internal/db/generated"
 )
 
+var ErrPaymentUnavailableForBanned = errors.New("payment unavailable for banned account")
+
+const bannedPaymentMessage = "Оплата недоступна для заблокированного аккаунта. Обратитесь к администратору."
+
 type Package struct {
 	ID           int64
 	Title        string
@@ -32,6 +36,7 @@ type Service struct {
 	Pool          *pgxpool.Pool
 	Q             *db.Queries
 	DBTimeout     time.Duration
+	beginTx       func(context.Context) (pgx.Tx, error)
 }
 
 func NewService(bot *tgbotapi.BotAPI, providerToken string, pool *pgxpool.Pool, q *db.Queries) *Service {
@@ -41,6 +46,9 @@ func NewService(bot *tgbotapi.BotAPI, providerToken string, pool *pgxpool.Pool, 
 		Pool:          pool,
 		Q:             q,
 		DBTimeout:     5 * time.Second,
+		beginTx: func(ctx context.Context) (pgx.Tx, error) {
+			return pool.Begin(ctx)
+		},
 	}
 }
 
@@ -50,6 +58,13 @@ func (s *Service) SendInvoiceForPackage(ctx context.Context, chatID int64, userI
 	providerJSON := []byte(pdStr)
 	dbCtx, cancel := s.withDBTimeout(ctx)
 	defer cancel()
+
+	if err := s.ensurePaymentAllowed(dbCtx, userID); err != nil {
+		if errors.Is(err, ErrPaymentUnavailableForBanned) {
+			log.Printf("payment: invoice blocked for banned user_id=%d package_id=%d", userID, pkg.ID)
+		}
+		return "", err
+	}
 
 	_, err := s.Q.CreateOrder(dbCtx, db.CreateOrderParams{
 		ID:        pgtype.UUID{Bytes: orderUUID, Valid: true},
@@ -143,7 +158,46 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Ошибка проверки платежа. Пожалуйста, свяжитесь с поддержкой."))
 		return nil
 	}
-	tx, err := s.Pool.Begin(dbCtx)
+	user, err := s.Q.GetUserByID(dbCtx, order.UserID)
+	if err != nil {
+		log.Printf("get user for order %s: %v", orderUUID.String(), err)
+		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
+		return err
+	}
+	if user.IsBanned {
+		log.Printf("payment: successful payment sent to manual review order=%s user_id=%d reason=banned_user", orderUUID.String(), order.UserID)
+		rows, markErr := s.Q.MarkOrderManualReview(dbCtx, db.MarkOrderManualReviewParams{
+			ID:                      pgtype.UUID{Bytes: orderUUID, Valid: true},
+			TgPaymentChargeID:       pgtype.Text{String: sp.TelegramPaymentChargeID, Valid: sp.TelegramPaymentChargeID != ""},
+			ProviderPaymentChargeID: pgtype.Text{String: sp.ProviderPaymentChargeID, Valid: sp.ProviderPaymentChargeID != ""},
+			BuyerEmail:              pgtype.Text{},
+		})
+		if markErr != nil {
+			log.Printf("payment: mark manual review failed order=%s err=%v", orderUUID.String(), markErr)
+			_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
+			return markErr
+		}
+		if rows == 0 {
+			current, gerr := s.Q.GetOrderByID(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
+			if gerr != nil {
+				log.Printf("payment: manual review status lookup failed order=%s err=%v", orderUUID.String(), gerr)
+				return gerr
+			}
+			if current.Status != "manual_review" {
+				return fmt.Errorf("illegal manual review transition for order %s, current status=%s", orderUUID.String(), current.Status)
+			}
+		}
+		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, bannedPaymentMessage))
+		return nil
+	}
+
+	beginTx := s.beginTx
+	if beginTx == nil {
+		beginTx = func(ctx context.Context) (pgx.Tx, error) {
+			return s.Pool.Begin(ctx)
+		}
+	}
+	tx, err := beginTx(dbCtx)
 	if err != nil {
 		log.Printf("begin payment tx failed: %v", err)
 		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
@@ -169,12 +223,28 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 			current, gerr := s.Q.GetOrderByID(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
 			if gerr == nil && current.Status == "paid" {
 				orderAlreadyPaid = true
+			} else if gerr == nil && current.Status == "manual_review" {
+				log.Printf("payment duplicate ignored order=%s status=manual_review", orderUUID.String())
+				_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, bannedPaymentMessage))
+				return nil
 			} else if gerr != nil {
 				log.Printf("illegal payment transition and order lookup failed for order %s: %v", orderUUID.String(), gerr)
 				return gerr
 			} else {
 				log.Printf("illegal payment transition for order %s", orderUUID.String())
 				return fmt.Errorf("illegal payment transition for order %s, current status=%s", orderUUID.String(), current.Status)
+			}
+			if orderAlreadyPaid {
+				if err := tx.Rollback(dbCtx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+					log.Printf("rollback duplicate payment tx failed order=%s err=%v", orderUUID.String(), err)
+				}
+				committed = true
+				log.Printf("payment duplicate ignored order=%s status=paid", orderUUID.String())
+				confirm := tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("Оплата уже была обработана ✅\nЗаказ: %s\nСумма: %d ₽", payload, amountRub))
+				if _, sendErr := s.Bot.Send(confirm); sendErr != nil {
+					log.Printf("duplicate payment confirmation send failed order=%s err=%v", orderUUID.String(), sendErr)
+				}
+				return nil
 			}
 		}
 		log.Printf("mark order paid failed: %v", err)
@@ -263,6 +333,16 @@ func (s *Service) validatePreCheckout(ctx context.Context, pcq *tgbotapi.PreChec
 		s.failOrder(dbCtx, orderUUID, "precheckout_mismatch")
 		return false, "Сумма заказа не совпадает", nil
 	}
+	user, err := s.Q.GetUserByID(dbCtx, order.UserID)
+	if err != nil {
+		log.Printf("precheckout get user failed order=%s err=%v", orderUUID.String(), err)
+		return false, "Временная ошибка подтверждения заказа", err
+	}
+	if user.IsBanned {
+		log.Printf("payment: precheckout blocked for banned user order=%s user_id=%d", orderUUID.String(), order.UserID)
+		s.failOrder(dbCtx, orderUUID, "banned_user_precheckout")
+		return false, bannedPaymentMessage, nil
+	}
 
 	affected, err := s.Q.MarkOrderPrecheckout(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
 	if err != nil {
@@ -302,6 +382,17 @@ func (s *Service) withDBTimeout(parent context.Context) (context.Context, contex
 		timeout = 5 * time.Second
 	}
 	return context.WithTimeout(parent, timeout)
+}
+
+func (s *Service) ensurePaymentAllowed(ctx context.Context, userID int64) error {
+	user, err := s.Q.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if user.IsBanned {
+		return ErrPaymentUnavailableForBanned
+	}
+	return nil
 }
 
 type providerData struct {

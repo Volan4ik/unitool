@@ -43,7 +43,7 @@ type Router struct {
 }
 
 type UserState struct {
-	Mode  string // text|image|video
+	Mode  string // image|video
 	Model string
 }
 
@@ -55,6 +55,8 @@ const (
 	tgMessageLimit     = 4096
 	tgEditPreviewLimit = 4000
 )
+
+var errEmptyModelResponse = errors.New("empty model response")
 
 func NewRouter(
 	b *Bot,
@@ -98,13 +100,13 @@ func (r *Router) HandleUpdate(ctx context.Context, upd tgbotapi.Update) error {
 		return r.handleCallback(ctx, upd.CallbackQuery)
 	}
 	if m := upd.Message; m != nil {
-		if m.SuccessfulPayment != nil {
-			return r.Pay.HandleSuccessfulPayment(ctx, m)
-		}
 		userID, err := EnsureUser(ctx, r.Q, m)
 		if err != nil {
 			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Ошибка авторизации пользователя: %v", err)))
 			return err
+		}
+		if m.SuccessfulPayment != nil {
+			return r.Pay.HandleSuccessfulPayment(ctx, m)
 		}
 		if m.From != nil && !r.isAdminTGID(m.From.ID) {
 			banned, berr := r.isUserBanned(ctx, m.From.ID)
@@ -133,6 +135,12 @@ func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID 
 		if _, err := r.Bot.API.Send(greet); err != nil {
 			return err
 		}
+	case "help":
+		help := tgbotapi.NewMessage(m.Chat.ID, buildHelpText())
+		help.ReplyMarkup = MainReplyKeyboard()
+		if _, err := r.Bot.API.Send(help); err != nil {
+			return err
+		}
 	case "admin":
 		return r.handleAdminCommand(ctx, m)
 	default:
@@ -143,6 +151,33 @@ func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID 
 		}
 	}
 	return nil
+}
+
+func buildHelpText() string {
+	imageModels := strings.Join(ModelUIList("image"), ", ")
+	videoModels := strings.Join(ModelUIList("video"), ", ")
+
+	return fmt.Sprintf(
+		"Как пользоваться ботом:\n\n"+
+			"1. Нажмите «Создать картинку» или «Создать видео».\n"+
+			"2. Выберите модель в меню «Модели».\n"+
+			"3. Отправьте текст промпта в чат.\n\n"+
+			"Доступные модели:\n"+
+			"Фото: %s\n"+
+			"Видео: %s\n\n"+
+			"Видео с референсом:\n"+
+			"Добавьте отдельную строку в промпте:\n"+
+			"input_reference=https://example.com/ref.png\n"+
+			"Ниже напишите описание сцены.\n\n"+
+			"Полезное:\n"+
+			"• «Мой профиль» — остаток генераций.\n"+
+			"• «Купить» — доступные пакеты.\n\n"+
+			"Команды:\n"+
+			"/start — главное меню\n"+
+			"/help — эта подсказка",
+		imageModels,
+		videoModels,
+	)
 }
 
 func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID int64) error {
@@ -157,8 +192,6 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 		}
 	}
 	switch txt {
-	case "Сгенерировать текст":
-		return r.selectMode(ctx, m.Chat.ID, userID, "text")
 	case "Создать картинку":
 		return r.selectMode(ctx, m.Chat.ID, userID, "image")
 	case "Создать видео":
@@ -169,7 +202,7 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Ошибка профиля: %v", err)))
 			return err
 		}
-		text := fmt.Sprintf("Доступно генераций:\n • Текст: %d\n • Фото: %d\n • Видео: %d\n\nБонус: +100 текстовых генераций каждую неделю.", bal.TextBalance, bal.ImageBalance, bal.VideoBalance)
+		text := fmt.Sprintf("Доступно генераций:\n • Фото: %d\n • Видео: %d", bal.ImageBalance, bal.VideoBalance)
 		msg := tgbotapi.NewMessage(m.Chat.ID, text)
 		msg.ReplyMarkup = MainReplyKeyboard()
 		buyBtn := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("Купить", "buy:menu")))
@@ -195,6 +228,13 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 	}
 
 	kind := st.Mode
+	if !isSupportedMode(kind) {
+		// Guard old sessions that still have deprecated "text" mode selected.
+		msg := tgbotapi.NewMessage(m.Chat.ID, "Текстовая генерация сейчас отключена. Выберите фото или видео.")
+		msg.ReplyMarkup = MainReplyKeyboard()
+		r.Bot.API.Send(msg)
+		return nil
+	}
 	modelID, ok := ResolveModel(kind, st.Model)
 	if !ok || modelID == "" {
 		msg := tgbotapi.NewMessage(m.Chat.ID, "Выбранная модель не поддерживается. Пожалуйста, выберите другую.")
@@ -219,7 +259,11 @@ func (r *Router) selectMode(ctx context.Context, chatID, userID int64, mode stri
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Для этого режима пока нет доступных моделей."))
 		return nil
 	}
-	def := opts[0]
+	def, ok := DefaultModelUI(mode)
+	if !ok || def == "" {
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Для этого режима пока нет доступных моделей."))
+		return nil
+	}
 	if err := r.setState(ctx, userID, UserState{Mode: mode, Model: def}); err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Не удалось сохранить выбор режима. Попробуйте снова."))
 		return err
@@ -230,8 +274,7 @@ func (r *Router) selectMode(ctx context.Context, chatID, userID int64, mode stri
 func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, userID int64, modelID, txt string) error {
 	kind := "text"
 	providerName := "comet"
-	if r.RL != nil && !r.RL.Allow() {
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Сервис перегружен, попробуйте позже."))
+	if !r.allowGenerationRequest(m.Chat.ID, kind) {
 		return nil
 	}
 
@@ -359,11 +402,14 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 		History: history,
 		Params:  map[string]any{"kind": kind},
 	}, onDelta)
-	finalText := strings.TrimSpace(resp.Output)
-	if finalText == "" {
+	finalText := resp.Output
+	if strings.TrimSpace(finalText) == "" && strings.TrimSpace(acc.String()) != "" {
 		finalText = acc.String()
 	}
-	if finalText != "" {
+	if err == nil && strings.TrimSpace(finalText) == "" {
+		err = errEmptyModelResponse
+	}
+	if err == nil && finalText != "" {
 		if pendingMsgID != 0 && !streamEditFailed {
 			if err := r.sendFinalStreamText(m.Chat.ID, pendingMsgID, finalText); err != nil {
 				streamEditFailed = true
@@ -391,6 +437,9 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 		refundMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "sync_generation_failed"})
 		refundErr := r.refundOneCredit(ctx, userID, kind, refundMeta, fmt.Sprintf("refund:gen:%d:%s", gr.ID, kind))
 		errMsg := "Ошибка генерации. Попытка возвращена."
+		if errors.Is(err, errEmptyModelResponse) {
+			errMsg = "Сервис вернул пустой ответ. Попытка возвращена."
+		}
 		if refundErr != nil {
 			log.Printf("sync-generation: refund failed gen_id=%d user_id=%d kind=%s err=%v reconcile_required=true", gr.ID, userID, kind, refundErr)
 			errMsg = "Ошибка генерации. Возврат попытки в обработке, попробуйте позже."
@@ -439,6 +488,9 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 
 func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message, userID int64, kind, modelID, txt string) error {
 	providerName := "comet"
+	if !r.allowGenerationRequest(m.Chat.ID, kind) {
+		return nil
+	}
 	if r.Moderation != nil {
 		mr, err := r.Moderation.CheckPrompt(ctx, txt)
 		if err != nil {
@@ -608,19 +660,22 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 		if !isSupportedMode(mode) {
 			return nil
 		}
-		list := ModelUIList(mode)
-		def := ""
-		if len(list) > 0 {
-			def = list[0]
+		selected := ""
+		st, ok, err := r.getState(ctx, u.ID)
+		if err != nil {
+			return err
 		}
-		if def != "" {
-			if err := r.setState(ctx, u.ID, UserState{Mode: mode, Model: def}); err != nil {
-				return err
-			}
+		if ok && st.Mode == mode {
+			selected = st.Model
 		}
-		kb := ModelsInlineKeyboard(mode, def)
+		kb := ModelsInlineKeyboard(mode, selected)
 		edit := tgbotapi.NewEditMessageReplyMarkup(chatID, cq.Message.MessageID, kb)
 		if _, err := r.Bot.API.Request(edit); err != nil {
+			return err
+		}
+		note := tgbotapi.NewMessage(chatID, "Выберите модель, чтобы активировать режим.")
+		note.ReplyMarkup = MainReplyKeyboard()
+		if _, err := r.Bot.API.Send(note); err != nil {
 			return err
 		}
 	case "model":
@@ -642,7 +697,11 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 		if _, err := r.Bot.API.Request(edit); err != nil {
 			return err
 		}
-		note := tgbotapi.NewMessage(chatID, fmt.Sprintf("Напишите промпт для %s — я отвечу в этом чате.", kindToRus(mode)))
+		if mode == "video" {
+			break
+		}
+		noteText := fmt.Sprintf("Напишите промпт для %s — я отвечу в этом чате.", kindToRus(mode))
+		note := tgbotapi.NewMessage(chatID, noteText)
 		note.ReplyMarkup = MainReplyKeyboard()
 		if _, err := r.Bot.API.Send(note); err != nil {
 			return err
@@ -665,6 +724,10 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 		}
 		p := payments.Package{ID: pkg.ID, Title: pkg.Title, PriceRub: int(pkg.PriceRub)}
 		if _, err := r.Pay.SendInvoiceForPackage(ctx, chatID, u.ID, p, ""); err != nil {
+			if errors.Is(err, payments.ErrPaymentUnavailableForBanned) {
+				r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Оплата недоступна для заблокированного аккаунта. Обратитесь к администратору."))
+				return nil
+			}
 			r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка оплаты: %v", err)))
 			return err
 		}
@@ -702,7 +765,7 @@ func (r *Router) showPackages(ctx context.Context, chatID int64) error {
 	lines := make([]string, 0, len(pkgs))
 	codes := make([]string, 0, len(pkgs))
 	for _, p := range pkgs {
-		lines = append(lines, fmt.Sprintf("• %s — %s (%d ₽)", p.Code, p.Title, p.PriceRub))
+		lines = append(lines, formatPackageOfferLine(p))
 		codes = append(codes, p.Code)
 	}
 
@@ -719,6 +782,21 @@ func (r *Router) showPackages(ctx context.Context, chatID int64) error {
 		return err
 	}
 	return nil
+}
+
+func formatPackageOfferLine(p db.Package) string {
+	switch {
+	case p.ImageCredits > 0 && p.VideoCredits == 0:
+		unit := float64(p.PriceRub) / float64(p.ImageCredits)
+		return fmt.Sprintf("• %s — %s: %d фото за %d ₽ (%.2f ₽/фото)", p.Code, p.Title, p.ImageCredits, p.PriceRub, unit)
+	case p.VideoCredits > 0 && p.ImageCredits == 0:
+		unit := float64(p.PriceRub) / float64(p.VideoCredits)
+		return fmt.Sprintf("• %s — %s: %d видео за %d ₽ (%.2f ₽/видео)", p.Code, p.Title, p.VideoCredits, p.PriceRub, unit)
+	case p.ImageCredits > 0 && p.VideoCredits > 0:
+		return fmt.Sprintf("• %s — %s: %d фото + %d видео за %d ₽", p.Code, p.Title, p.ImageCredits, p.VideoCredits, p.PriceRub)
+	default:
+		return fmt.Sprintf("• %s — %s: %d ₽", p.Code, p.Title, p.PriceRub)
+	}
 }
 
 func (r *Router) ensureConvID(ctx context.Context, userID int64, kind string) (uuid.UUID, error) {
@@ -881,7 +959,15 @@ func kindToRus(kind string) string {
 }
 
 func isSupportedMode(mode string) bool {
-	return mode == "text" || mode == "image" || mode == "video"
+	return mode == "image" || mode == "video"
+}
+
+func (r *Router) allowGenerationRequest(chatID int64, kind string) bool {
+	if r.RL == nil || r.RL.AllowKind(kind) {
+		return true
+	}
+	_, _ = r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Сервис перегружен, попробуйте позже."))
+	return false
 }
 
 func (r *Router) isUserBanned(ctx context.Context, tgID int64) (bool, error) {

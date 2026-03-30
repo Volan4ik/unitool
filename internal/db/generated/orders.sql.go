@@ -129,6 +129,37 @@ func (q *Queries) MarkOrderFailed(ctx context.Context, id pgtype.UUID) (int64, e
 	return result.RowsAffected(), nil
 }
 
+const markOrderManualReview = `-- name: MarkOrderManualReview :execrows
+UPDATE orders
+SET status='manual_review',
+    paid_at = COALESCE(paid_at, now()),
+    tg_payment_charge_id = COALESCE($2, tg_payment_charge_id),
+    provider_payment_charge_id = COALESCE($3, provider_payment_charge_id),
+    buyer_email = COALESCE($4, buyer_email)
+WHERE id=$1
+  AND status IN ('created','precheckout_ok')
+`
+
+type MarkOrderManualReviewParams struct {
+	ID                      pgtype.UUID `json:"id"`
+	TgPaymentChargeID       pgtype.Text `json:"tg_payment_charge_id"`
+	ProviderPaymentChargeID pgtype.Text `json:"provider_payment_charge_id"`
+	BuyerEmail              pgtype.Text `json:"buyer_email"`
+}
+
+func (q *Queries) MarkOrderManualReview(ctx context.Context, arg MarkOrderManualReviewParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markOrderManualReview,
+		arg.ID,
+		arg.TgPaymentChargeID,
+		arg.ProviderPaymentChargeID,
+		arg.BuyerEmail,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markOrderPaid = `-- name: MarkOrderPaid :one
 UPDATE orders
 SET status='paid', paid_at=now(),

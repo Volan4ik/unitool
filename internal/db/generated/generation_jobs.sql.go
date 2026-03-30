@@ -29,7 +29,7 @@ SET status = 'running',
     updated_at = now()
 FROM picked
 WHERE g.id = picked.id
-RETURNING g.id, g.generation_request_id, g.user_id, g.chat_id, g.conversation_id, g.kind, g.provider, g.model, g.prompt, g.status, g.result_text, g.error_message, g.attempts, g.max_attempts, g.next_attempt_at, g.created_at, g.updated_at, g.finished_at
+RETURNING g.id, g.generation_request_id, g.user_id, g.chat_id, g.conversation_id, g.kind, g.provider, g.model, g.prompt, g.status::text AS status, g.result_text, g.error_message, g.attempts, g.max_attempts, g.next_attempt_at, g.created_at, g.updated_at, g.finished_at
 `
 
 func (q *Queries) ClaimNextGenerationJob(ctx context.Context) (GenerationJob, error) {
@@ -66,7 +66,7 @@ INSERT INTO generation_jobs (
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', COALESCE($9, 3))
 ON CONFLICT (generation_request_id) DO UPDATE
 SET updated_at = now()
-RETURNING id, generation_request_id, user_id, chat_id, conversation_id, kind, provider, model, prompt, status, result_text, error_message, attempts, max_attempts, next_attempt_at, created_at, updated_at, finished_at
+RETURNING id, generation_request_id, user_id, chat_id, conversation_id, kind, provider, model, prompt, status::text AS status, result_text, error_message, attempts, max_attempts, next_attempt_at, created_at, updated_at, finished_at
 `
 
 type EnqueueGenerationJobParams struct {

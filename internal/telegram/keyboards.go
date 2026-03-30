@@ -6,7 +6,6 @@ import (
 
 func MainReplyKeyboard() tgbotapi.ReplyKeyboardMarkup {
 	row1 := tgbotapi.NewKeyboardButtonRow(
-		tgbotapi.NewKeyboardButton("Сгенерировать текст"),
 		tgbotapi.NewKeyboardButton("Создать картинку"),
 		tgbotapi.NewKeyboardButton("Создать видео"),
 	)
@@ -23,7 +22,6 @@ func MainReplyKeyboard() tgbotapi.ReplyKeyboardMarkup {
 func ModelsInlineKeyboard(mode string, selected string) tgbotapi.InlineKeyboardMarkup {
 	// Mode switch row
 	tabs := tgbotapi.NewInlineKeyboardRow(
-		tgbotapi.NewInlineKeyboardButtonData("Текст", "mode:text"),
 		tgbotapi.NewInlineKeyboardButtonData("Фото", "mode:image"),
 		tgbotapi.NewInlineKeyboardButtonData("Видео", "mode:video"),
 	)

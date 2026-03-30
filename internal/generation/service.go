@@ -2,11 +2,15 @@ package generation
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"net/url"
+	"os"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -34,9 +38,14 @@ type Service struct {
 const (
 	mediaSendAttempts     = 3
 	mediaSendBaseBackoff  = 700 * time.Millisecond
+	mediaFetchTimeout     = 45 * time.Second
+	maxDownloadedMedia    = 80 * 1024 * 1024
+	maxInlineImageBytes   = 15 * 1024 * 1024
 	maxProviderOutputSize = 512
 	staleFailReason       = "stale running job exhausted attempts"
 )
+
+var downloadMediaFn = downloadMediaBytes
 
 func NewService(bot *tgbotapi.BotAPI, q *db.Queries, prov provider.ModelProvider, workers int, pollEvery, genTimeout time.Duration) *Service {
 	if workers <= 0 {
@@ -182,11 +191,21 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 	ctxGen, cancel := context.WithTimeout(ctx, s.GenTimeout)
 	defer cancel()
 
+	input := job.Prompt
+	params := map[string]any{"kind": job.Kind}
+	if job.Kind == "video" {
+		cleanPrompt, inputReference := splitVideoPromptInputReference(job.Prompt)
+		input = cleanPrompt
+		if inputReference != "" {
+			params["input_reference"] = inputReference
+		}
+	}
+
 	resp, err := s.Prov.Generate(ctxGen, provider.ModelRequest{
 		UserID: job.UserID,
-		Input:  job.Prompt,
+		Input:  input,
 		Model:  job.Model,
-		Params: map[string]any{"kind": job.Kind},
+		Params: params,
 	})
 	latency := int32(time.Since(t0).Milliseconds())
 	if err != nil {
@@ -412,6 +431,7 @@ func (s *Service) refundOneCredit(ctx context.Context, userID int64, kind string
 }
 
 func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, output string) {
+	triedDownloadedVideo := false
 	if output == "" {
 		log.Printf(
 			"generation: empty output fallback job_id=%d user_id=%d chat_id=%d kind=%s",
@@ -426,12 +446,29 @@ func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, out
 		return
 	}
 
+	if job.Kind == "image" && isDataImageURI(output) {
+		s.sendInlineImageResult(ctx, job, output)
+		return
+	}
+
+	if job.Kind == "video" && shouldDownloadVideoFirst(output) {
+		triedDownloadedVideo = true
+		if err := s.sendDownloadedVideo(ctx, job, output); err == nil {
+			return
+		} else {
+			log.Printf(
+				"generation: pre-download video send failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v output=%q",
+				job.ID, job.UserID, job.ChatID, job.Kind, err, shortOutput(output),
+			)
+		}
+	}
+
 	if !isHTTPURL(output) {
 		log.Printf(
 			"generation: invalid output url fallback job_id=%d user_id=%d chat_id=%d kind=%s output=%q",
 			job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output),
 		)
-		msg := fmt.Sprintf("Генерация завершена. Ссылка на медиа некорректна: %s", output)
+		msg := "Генерация завершена, но не удалось обработать ссылку на медиа."
 		if err := s.sendText(job.ChatID, msg); err != nil {
 			log.Printf(
 				"generation: invalid-url fallback send failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
@@ -452,6 +489,22 @@ func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, out
 			video := tgbotapi.NewVideo(job.ChatID, tgbotapi.FileURL(output))
 			video.Caption = "Готово ✅"
 			_, lastErr = s.Bot.Send(video)
+			if lastErr == nil {
+				break
+			}
+			// Some providers return video content URLs with non-video MIME type.
+			// In that case Telegram rejects sendVideo, but sendDocument can still work.
+			doc := tgbotapi.NewDocument(job.ChatID, tgbotapi.FileURL(output))
+			doc.Caption = "Готово ✅"
+			if _, docErr := s.Bot.Send(doc); docErr == nil {
+				log.Printf(
+					"generation: telegram video sent as document job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d output=%q",
+					job.ID, job.UserID, job.ChatID, job.Kind, attempt, shortOutput(output),
+				)
+				return
+			} else {
+				lastErr = fmt.Errorf("sendVideo: %v; sendDocument: %v", lastErr, docErr)
+			}
 		default:
 			lastErr = fmt.Errorf("unsupported media kind: %s", job.Kind)
 		}
@@ -479,7 +532,18 @@ func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, out
 		}
 	}
 
-	msg := fmt.Sprintf("Не удалось отправить медиа как файл. Вот ссылка на результат: %s", output)
+	msg := "Не удалось отправить медиа как файл. Попробуйте позже."
+	if job.Kind == "video" && !triedDownloadedVideo {
+		if err := s.sendDownloadedVideo(ctx, job, output); err == nil {
+			return
+		} else {
+			log.Printf(
+				"generation: downloaded video fallback failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v output=%q",
+				job.ID, job.UserID, job.ChatID, job.Kind, err, shortOutput(output),
+			)
+		}
+	}
+
 	if err := s.sendText(job.ChatID, msg); err != nil {
 		log.Printf(
 			"generation: telegram text fallback failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
@@ -491,6 +555,111 @@ func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, out
 		"generation: telegram fallback sent job_id=%d user_id=%d chat_id=%d kind=%s output=%q last_err=%v",
 		job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output), lastErr,
 	)
+}
+
+func (s *Service) sendInlineImageResult(ctx context.Context, job db.GenerationJob, output string) {
+	mime, blob, err := decodeDataImageURI(output)
+	if err != nil {
+		log.Printf(
+			"generation: invalid inline image fallback job_id=%d user_id=%d chat_id=%d kind=%s err=%v output=%q",
+			job.ID, job.UserID, job.ChatID, job.Kind, err, shortOutput(output),
+		)
+		msg := "Генерация завершена, но встроенное изображение повреждено."
+		if sendErr := s.sendText(job.ChatID, msg); sendErr != nil {
+			log.Printf(
+				"generation: invalid-inline-image fallback send failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
+				job.ID, job.UserID, job.ChatID, job.Kind, sendErr,
+			)
+		}
+		return
+	}
+
+	fileName := "generated.png"
+	if strings.Contains(mime, "jpeg") || strings.Contains(mime, "jpg") {
+		fileName = "generated.jpg"
+	} else if strings.Contains(mime, "webp") {
+		fileName = "generated.webp"
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= mediaSendAttempts; attempt++ {
+		photo := tgbotapi.NewPhoto(job.ChatID, tgbotapi.FileBytes{Name: fileName, Bytes: blob})
+		photo.Caption = "Готово ✅"
+		_, lastErr = s.Bot.Send(photo)
+		if lastErr == nil {
+			log.Printf(
+				"generation: telegram inline image send ok job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d bytes=%d",
+				job.ID, job.UserID, job.ChatID, job.Kind, attempt, len(blob),
+			)
+			return
+		}
+		log.Printf(
+			"generation: telegram inline image send failed job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d err=%v",
+			job.ID, job.UserID, job.ChatID, job.Kind, attempt, lastErr,
+		)
+		if attempt == mediaSendAttempts {
+			break
+		}
+		wait := time.Duration(attempt) * mediaSendBaseBackoff
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+
+	if err := s.sendText(job.ChatID, "Не удалось отправить сгенерированное изображение."); err != nil {
+		log.Printf(
+			"generation: inline-image text fallback failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
+			job.ID, job.UserID, job.ChatID, job.Kind, err,
+		)
+		return
+	}
+	log.Printf(
+		"generation: inline-image fallback sent job_id=%d user_id=%d chat_id=%d kind=%s last_err=%v",
+		job.ID, job.UserID, job.ChatID, job.Kind, lastErr,
+	)
+}
+
+func (s *Service) sendDownloadedVideo(ctx context.Context, job db.GenerationJob, output string) error {
+	if !isHTTPURL(output) {
+		return fmt.Errorf("output is not http url")
+	}
+	data, contentType, err := downloadMediaFn(ctx, output)
+	if err != nil {
+		return err
+	}
+	fileName := "generated.mp4"
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if strings.Contains(ct, "webm") {
+		fileName = "generated.webm"
+	} else if strings.Contains(ct, "quicktime") {
+		fileName = "generated.mov"
+	}
+
+	video := tgbotapi.NewVideo(job.ChatID, tgbotapi.FileBytes{Name: fileName, Bytes: data})
+	video.Caption = "Готово ✅"
+	if _, err := s.Bot.Send(video); err == nil {
+		log.Printf(
+			"generation: downloaded video sent as video job_id=%d user_id=%d chat_id=%d kind=%s bytes=%d",
+			job.ID, job.UserID, job.ChatID, job.Kind, len(data),
+		)
+		return nil
+	} else {
+		doc := tgbotapi.NewDocument(job.ChatID, tgbotapi.FileBytes{Name: fileName, Bytes: data})
+		doc.Caption = "Готово ✅"
+		if _, docErr := s.Bot.Send(doc); docErr == nil {
+			log.Printf(
+				"generation: downloaded video sent as document job_id=%d user_id=%d chat_id=%d kind=%s bytes=%d",
+				job.ID, job.UserID, job.ChatID, job.Kind, len(data),
+			)
+			return nil
+		} else {
+			return fmt.Errorf("send downloaded video failed: sendVideo: %v; sendDocument: %v", err, docErr)
+		}
+	}
 }
 
 func (s *Service) sendText(chatID int64, text string) error {
@@ -507,6 +676,178 @@ func isHTTPURL(raw string) bool {
 		return false
 	}
 	return true
+}
+
+func shouldDownloadVideoFirst(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Host))
+	if !strings.Contains(host, "api.cometapi.com") {
+		return false
+	}
+	p := strings.ToLower(strings.TrimSpace(u.Path))
+	return strings.Contains(p, "/v1/videos/") && strings.Contains(p, "/content")
+}
+
+func isDataImageURI(raw string) bool {
+	candidate := extractDataImageURI(raw)
+	return candidate != ""
+}
+
+func extractDataImageURI(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	lower := strings.ToLower(s)
+	start := strings.Index(lower, "data:image/")
+	if start < 0 {
+		return ""
+	}
+	rest := s[start:]
+	end := len(rest)
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case ' ', '\n', '\r', '\t', ')', ']', '"', '\'':
+			end = i
+			goto done
+		}
+	}
+done:
+	candidate := strings.TrimSpace(rest[:end])
+	if candidate == "" {
+		return ""
+	}
+	return strings.TrimRight(candidate, ".,;:")
+}
+
+func decodeDataImageURI(raw string) (string, []byte, error) {
+	candidate := extractDataImageURI(raw)
+	if candidate == "" {
+		return "", nil, errors.New("data image uri not found")
+	}
+
+	comma := strings.Index(candidate, ",")
+	if comma <= 0 || comma == len(candidate)-1 {
+		return "", nil, errors.New("invalid data uri format")
+	}
+	header := strings.ToLower(strings.TrimSpace(candidate[:comma]))
+	if !strings.HasPrefix(header, "data:image/") {
+		return "", nil, errors.New("not an image data uri")
+	}
+	if !strings.Contains(header, ";base64") {
+		return "", nil, errors.New("data uri is not base64 encoded")
+	}
+
+	enc := strings.TrimSpace(candidate[comma+1:])
+	enc = strings.NewReplacer("\n", "", "\r", "", "\t", "", " ", "").Replace(enc)
+	blob, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		blob, err = base64.RawStdEncoding.DecodeString(enc)
+		if err != nil {
+			return "", nil, fmt.Errorf("decode base64: %w", err)
+		}
+	}
+	if len(blob) == 0 {
+		return "", nil, errors.New("decoded image is empty")
+	}
+	if len(blob) > maxInlineImageBytes {
+		return "", nil, fmt.Errorf("decoded image too large: %d bytes", len(blob))
+	}
+	return header, blob, nil
+}
+
+func splitVideoPromptInputReference(raw string) (string, string) {
+	if strings.TrimSpace(raw) == "" {
+		return "", ""
+	}
+	lines := strings.Split(raw, "\n")
+	kept := make([]string, 0, len(lines))
+	inputReference := ""
+	for _, line := range lines {
+		if ref, ok := parseInputReferenceLine(line); ok && inputReference == "" {
+			inputReference = ref
+			continue
+		}
+		kept = append(kept, line)
+	}
+	prompt := strings.TrimSpace(strings.Join(kept, "\n"))
+	return prompt, inputReference
+}
+
+func parseInputReferenceLine(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "input_reference") {
+		return "", false
+	}
+	tail := strings.TrimSpace(trimmed[len("input_reference"):])
+	if tail == "" {
+		return "", false
+	}
+	if tail[0] != ':' && tail[0] != '=' {
+		return "", false
+	}
+	value := strings.TrimSpace(tail[1:])
+	value = strings.Trim(value, `"'`)
+	value = strings.TrimPrefix(value, "<")
+	value = strings.TrimSuffix(value, ">")
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	return value, true
+}
+
+func downloadMediaBytes(ctx context.Context, rawURL string) ([]byte, string, error) {
+	ctxFetch, cancel := context.WithTimeout(ctx, mediaFetchTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctxFetch, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Accept", "*/*")
+
+	// Comet /v1/videos/{id}/content may require bearer auth and is not
+	// fetchable by Telegram directly.
+	if strings.Contains(strings.ToLower(rawURL), "api.cometapi.com/v1/videos/") {
+		if key := strings.TrimSpace(os.Getenv("COMET_API_KEY")); key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+	}
+
+	client := &http.Client{Timeout: mediaFetchTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, "", fmt.Errorf("download media http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	limited := io.LimitReader(resp.Body, maxDownloadedMedia+1)
+	payload, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, "", err
+	}
+	if int64(len(payload)) > maxDownloadedMedia {
+		return nil, "", fmt.Errorf("downloaded media exceeds limit: %d bytes", len(payload))
+	}
+	if len(payload) == 0 {
+		return nil, "", errors.New("downloaded media is empty")
+	}
+	return payload, resp.Header.Get("Content-Type"), nil
 }
 
 func shortOutput(raw string) string {
