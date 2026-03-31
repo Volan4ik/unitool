@@ -29,12 +29,51 @@ SET status = 'running',
     updated_at = now()
 FROM picked
 WHERE g.id = picked.id
-RETURNING g.id, g.generation_request_id, g.user_id, g.chat_id, g.conversation_id, g.kind, g.provider, g.model, g.prompt, g.status::text AS status, g.result_text, g.error_message, g.attempts, g.max_attempts, g.next_attempt_at, g.created_at, g.updated_at, g.finished_at
+RETURNING
+  g.id,
+  g.generation_request_id,
+  g.user_id,
+  g.chat_id,
+  g.conversation_id,
+  g.kind,
+  g.provider,
+  g.model,
+  g.prompt,
+  g.status::text AS status,
+  g.result_text,
+  g.error_message,
+  g.attempts,
+  g.max_attempts,
+  g.next_attempt_at,
+  g.created_at,
+  g.updated_at,
+  g.finished_at
 `
 
-func (q *Queries) ClaimNextGenerationJob(ctx context.Context) (GenerationJob, error) {
+type ClaimNextGenerationJobRow struct {
+	ID                  int64              `json:"id"`
+	GenerationRequestID int64              `json:"generation_request_id"`
+	UserID              int64              `json:"user_id"`
+	ChatID              int64              `json:"chat_id"`
+	ConversationID      pgtype.UUID        `json:"conversation_id"`
+	Kind                string             `json:"kind"`
+	Provider            string             `json:"provider"`
+	Model               string             `json:"model"`
+	Prompt              string             `json:"prompt"`
+	Status              string             `json:"status"`
+	ResultText          pgtype.Text        `json:"result_text"`
+	ErrorMessage        pgtype.Text        `json:"error_message"`
+	Attempts            int32              `json:"attempts"`
+	MaxAttempts         int32              `json:"max_attempts"`
+	NextAttemptAt       pgtype.Timestamptz `json:"next_attempt_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	FinishedAt          pgtype.Timestamptz `json:"finished_at"`
+}
+
+func (q *Queries) ClaimNextGenerationJob(ctx context.Context) (ClaimNextGenerationJobRow, error) {
 	row := q.db.QueryRow(ctx, claimNextGenerationJob)
-	var i GenerationJob
+	var i ClaimNextGenerationJobRow
 	err := row.Scan(
 		&i.ID,
 		&i.GenerationRequestID,
@@ -66,7 +105,25 @@ INSERT INTO generation_jobs (
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'queued', COALESCE($9, 3))
 ON CONFLICT (generation_request_id) DO UPDATE
 SET updated_at = now()
-RETURNING id, generation_request_id, user_id, chat_id, conversation_id, kind, provider, model, prompt, status::text AS status, result_text, error_message, attempts, max_attempts, next_attempt_at, created_at, updated_at, finished_at
+RETURNING
+  id,
+  generation_request_id,
+  user_id,
+  chat_id,
+  conversation_id,
+  kind,
+  provider,
+  model,
+  prompt,
+  status::text AS status,
+  result_text,
+  error_message,
+  attempts,
+  max_attempts,
+  next_attempt_at,
+  created_at,
+  updated_at,
+  finished_at
 `
 
 type EnqueueGenerationJobParams struct {
@@ -81,7 +138,28 @@ type EnqueueGenerationJobParams struct {
 	Column9             interface{} `json:"column_9"`
 }
 
-func (q *Queries) EnqueueGenerationJob(ctx context.Context, arg EnqueueGenerationJobParams) (GenerationJob, error) {
+type EnqueueGenerationJobRow struct {
+	ID                  int64              `json:"id"`
+	GenerationRequestID int64              `json:"generation_request_id"`
+	UserID              int64              `json:"user_id"`
+	ChatID              int64              `json:"chat_id"`
+	ConversationID      pgtype.UUID        `json:"conversation_id"`
+	Kind                string             `json:"kind"`
+	Provider            string             `json:"provider"`
+	Model               string             `json:"model"`
+	Prompt              string             `json:"prompt"`
+	Status              string             `json:"status"`
+	ResultText          pgtype.Text        `json:"result_text"`
+	ErrorMessage        pgtype.Text        `json:"error_message"`
+	Attempts            int32              `json:"attempts"`
+	MaxAttempts         int32              `json:"max_attempts"`
+	NextAttemptAt       pgtype.Timestamptz `json:"next_attempt_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	FinishedAt          pgtype.Timestamptz `json:"finished_at"`
+}
+
+func (q *Queries) EnqueueGenerationJob(ctx context.Context, arg EnqueueGenerationJobParams) (EnqueueGenerationJobRow, error) {
 	row := q.db.QueryRow(ctx, enqueueGenerationJob,
 		arg.GenerationRequestID,
 		arg.UserID,
@@ -93,7 +171,7 @@ func (q *Queries) EnqueueGenerationJob(ctx context.Context, arg EnqueueGeneratio
 		arg.Prompt,
 		arg.Column9,
 	)
-	var i GenerationJob
+	var i EnqueueGenerationJobRow
 	err := row.Scan(
 		&i.ID,
 		&i.GenerationRequestID,

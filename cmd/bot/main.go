@@ -24,6 +24,7 @@ import (
 	"unitool/internal/logger"
 	"unitool/internal/metrics"
 	"unitool/internal/moderation"
+	"unitool/internal/notifier"
 	"unitool/internal/payments"
 	"unitool/internal/rate"
 	"unitool/internal/retention"
@@ -91,6 +92,9 @@ func main() {
 		modClient = moderation.NewOpenAIClient(cfg.OpenAIBase, cfg.OpenAIKey, cfg.ModerationModel, cfg.ModerationTimeout)
 	}
 	router := telegram.NewRouter(bot, adminSvc, adminIDs, pay, queries, comet, rl, modClient, editThrottle, cfg.TGEditMaxPerMin)
+	notifierSvc := notifier.NewService(pg, bot.API)
+	router.Notifier = notifierSvc
+	notifierSvc.Start(ctx)
 	updatePool := workers.NewPool(cfg.QueueBuffer, cfg.MaxWorkers)
 	genSvc := generation.NewService(
 		bot.API,
@@ -318,6 +322,9 @@ func main() {
 	}
 	if err := weeklySvc.Wait(shutdownCtx); err != nil {
 		logg.Error().Err(err).Msg("weekly service wait")
+	}
+	if err := notifierSvc.Wait(shutdownCtx); err != nil {
+		logg.Error().Err(err).Msg("notifier service wait")
 	}
 	if retentionSvc != nil {
 		if err := retentionSvc.Wait(shutdownCtx); err != nil {

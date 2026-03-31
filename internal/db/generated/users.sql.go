@@ -87,6 +87,38 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 	return cnt, err
 }
 
+const countUsersBySourceTag = `-- name: CountUsersBySourceTag :many
+SELECT source_tag, COUNT(*)::bigint AS users_count
+FROM user_start_attribution
+GROUP BY source_tag
+ORDER BY users_count DESC, source_tag ASC
+`
+
+type CountUsersBySourceTagRow struct {
+	SourceTag  string `json:"source_tag"`
+	UsersCount int64  `json:"users_count"`
+}
+
+func (q *Queries) CountUsersBySourceTag(ctx context.Context) ([]CountUsersBySourceTagRow, error) {
+	rows, err := q.db.Query(ctx, countUsersBySourceTag)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountUsersBySourceTagRow
+	for rows.Next() {
+		var i CountUsersBySourceTagRow
+		if err := rows.Scan(&i.SourceTag, &i.UsersCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getBalancesByUserID = `-- name: GetBalancesByUserID :one
 SELECT text_balance, image_balance, video_balance FROM users WHERE id = $1
 `
@@ -319,6 +351,32 @@ func (q *Queries) TopUsersByGenerationCount(ctx context.Context, limit int32) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const trackUserStartAttribution = `-- name: TrackUserStartAttribution :execrows
+INSERT INTO user_start_attribution (user_id, tg_id, username, source_tag)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (user_id) DO NOTHING
+`
+
+type TrackUserStartAttributionParams struct {
+	UserID    int64       `json:"user_id"`
+	TgID      int64       `json:"tg_id"`
+	Username  pgtype.Text `json:"username"`
+	SourceTag string      `json:"source_tag"`
+}
+
+func (q *Queries) TrackUserStartAttribution(ctx context.Context, arg TrackUserStartAttributionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, trackUserStartAttribution,
+		arg.UserID,
+		arg.TgID,
+		arg.Username,
+		arg.SourceTag,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertUserByTGID = `-- name: UpsertUserByTGID :one

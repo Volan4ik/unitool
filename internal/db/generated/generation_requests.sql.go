@@ -58,9 +58,9 @@ type FinishGenerationRequestParams struct {
 	ID               int64       `json:"id"`
 	OutputTokens     pgtype.Int4 `json:"output_tokens"`
 	LatencyMs        pgtype.Int4 `json:"latency_ms"`
-	CostCreditsText  pgtype.Int4 `json:"cost_credits_text"`
-	CostCreditsImage pgtype.Int4 `json:"cost_credits_image"`
-	CostCreditsVideo pgtype.Int4 `json:"cost_credits_video"`
+	CostCreditsText  int32       `json:"cost_credits_text"`
+	CostCreditsImage int32       `json:"cost_credits_image"`
+	CostCreditsVideo int32       `json:"cost_credits_video"`
 }
 
 func (q *Queries) FinishGenerationRequest(ctx context.Context, arg FinishGenerationRequestParams) (int64, error) {
@@ -86,9 +86,27 @@ FROM generation_requests
 WHERE update_id = $1
 `
 
-func (q *Queries) GetGenerationRequestByUpdateID(ctx context.Context, updateID pgtype.Int8) (GenerationRequest, error) {
+type GetGenerationRequestByUpdateIDRow struct {
+	ID               int64              `json:"id"`
+	UserID           int64              `json:"user_id"`
+	UpdateID         pgtype.Int8        `json:"update_id"`
+	Kind             string             `json:"kind"`
+	Provider         string             `json:"provider"`
+	Model            string             `json:"model"`
+	OutputTokens     pgtype.Int4        `json:"output_tokens"`
+	CostCreditsText  int32              `json:"cost_credits_text"`
+	CostCreditsImage int32              `json:"cost_credits_image"`
+	CostCreditsVideo int32              `json:"cost_credits_video"`
+	Status           string             `json:"status"`
+	ErrorMessage     pgtype.Text        `json:"error_message"`
+	LatencyMs        pgtype.Int4        `json:"latency_ms"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+}
+
+func (q *Queries) GetGenerationRequestByUpdateID(ctx context.Context, updateID pgtype.Int8) (GetGenerationRequestByUpdateIDRow, error) {
 	row := q.db.QueryRow(ctx, getGenerationRequestByUpdateID, updateID)
-	var i GenerationRequest
+	var i GetGenerationRequestByUpdateIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,
@@ -128,7 +146,25 @@ type InsertGenerationRequestParams struct {
 	Column6  interface{} `json:"column_6"`
 }
 
-func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerationRequestParams) (GenerationRequest, error) {
+type InsertGenerationRequestRow struct {
+	ID               int64              `json:"id"`
+	UserID           int64              `json:"user_id"`
+	UpdateID         pgtype.Int8        `json:"update_id"`
+	Kind             string             `json:"kind"`
+	Provider         string             `json:"provider"`
+	Model            string             `json:"model"`
+	OutputTokens     pgtype.Int4        `json:"output_tokens"`
+	CostCreditsText  int32              `json:"cost_credits_text"`
+	CostCreditsImage int32              `json:"cost_credits_image"`
+	CostCreditsVideo int32              `json:"cost_credits_video"`
+	Status           string             `json:"status"`
+	ErrorMessage     pgtype.Text        `json:"error_message"`
+	LatencyMs        pgtype.Int4        `json:"latency_ms"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	FinishedAt       pgtype.Timestamptz `json:"finished_at"`
+}
+
+func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerationRequestParams) (InsertGenerationRequestRow, error) {
 	row := q.db.QueryRow(ctx, insertGenerationRequest,
 		arg.UserID,
 		arg.UpdateID,
@@ -137,7 +173,7 @@ func (q *Queries) InsertGenerationRequest(ctx context.Context, arg InsertGenerat
 		arg.Model,
 		arg.Column6,
 	)
-	var i GenerationRequest
+	var i InsertGenerationRequestRow
 	err := row.Scan(
 		&i.ID,
 		&i.UserID,

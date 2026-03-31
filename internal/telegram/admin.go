@@ -22,6 +22,7 @@ const (
 	adminActionUserFindName        = "user_find_name"
 	adminActionBan                 = "ban_set"
 	adminActionUnban               = "ban_unset"
+	adminActionBroadcast           = "broadcast_send"
 	adminUserSearchLimit     int32 = 10
 	adminTopUsersLimit       int32 = 10
 )
@@ -93,6 +94,14 @@ func (r *Router) handleAdminCallback(ctx context.Context, cq *tgbotapi.CallbackQ
 			return nil
 		}
 		return r.handleAdminBanAction(cq.From.ID, chatID, parts[2:])
+	case "broadcast":
+		if r.Notifier == nil {
+			r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Сервис рассылок не настроен."))
+			return nil
+		}
+		r.setAdminFlow(cq.From.ID, adminActionBroadcast)
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Введите текст рассылки для всех пользователей."))
+		return nil
 	default:
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Неизвестное действие админки."))
 	}
@@ -114,7 +123,7 @@ func (r *Router) handleAdminTextInput(ctx context.Context, m *tgbotapi.Message, 
 	case adminActionPkgAdd:
 		in, err := parsePackageInput(txt)
 		if err != nil {
-			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Формат: code|name|price|currency|attempts_text|attempts_image|attempts_video|is_active"))
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Формат: code|name|price|currency|attempts_image|attempts_video|is_active"))
 			return true, nil
 		}
 		p, err := r.Admin.CreatePackage(ctx, in)
@@ -128,7 +137,7 @@ func (r *Router) handleAdminTextInput(ctx context.Context, m *tgbotapi.Message, 
 	case adminActionPkgEdit:
 		id, in, err := parsePackageEditInput(txt)
 		if err != nil {
-			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Формат: id|code|name|price|currency|attempts_text|attempts_image|attempts_video|is_active"))
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Формат: id|code|name|price|currency|attempts_image|attempts_video|is_active"))
 			return true, nil
 		}
 		p, err := r.Admin.UpdatePackage(ctx, id, in)
@@ -231,6 +240,25 @@ func (r *Router) handleAdminTextInput(ctx context.Context, m *tgbotapi.Message, 
 		r.clearAdminFlow(adminTGID)
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Пользователь разбанен."))
 		return true, nil
+	case adminActionBroadcast:
+		if r.Notifier == nil {
+			r.clearAdminFlow(adminTGID)
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Сервис рассылок не настроен."))
+			return true, nil
+		}
+		body := strings.TrimSpace(txt)
+		if body == "" {
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Текст рассылки пустой. Введите текст."))
+			return true, nil
+		}
+		campaignID, err := r.Notifier.EnqueueBroadcast(ctx, adminTGID, body)
+		if err != nil {
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Ошибка запуска рассылки: %v", err)))
+			return true, err
+		}
+		r.clearAdminFlow(adminTGID)
+		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Рассылка запущена. campaign_id=%d", campaignID)))
+		return true, nil
 	default:
 		r.clearAdminFlow(adminTGID)
 		return false, nil
@@ -262,10 +290,10 @@ func (r *Router) handleAdminPackagesAction(ctx context.Context, adminTGID, chatI
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, strings.Join(lines, "\n\n")))
 	case "add":
 		r.setAdminFlow(adminTGID, adminActionPkgAdd)
-		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Введите пакет:\ncode|name|price|currency|attempts_text|attempts_image|attempts_video|is_active"))
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Введите пакет:\ncode|name|price|currency|attempts_image|attempts_video|is_active"))
 	case "edit":
 		r.setAdminFlow(adminTGID, adminActionPkgEdit)
-		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Введите пакет:\nid|code|name|price|currency|attempts_text|attempts_image|attempts_video|is_active"))
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Введите пакет:\nid|code|name|price|currency|attempts_image|attempts_video|is_active"))
 	case "delete":
 		r.setAdminFlow(adminTGID, adminActionPkgDelete)
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Введите package id для удаления"))
@@ -341,6 +369,12 @@ func (r *Router) sendAdminStats(ctx context.Context, chatID int64) error {
 			lines = append(lines, fmt.Sprintf("%d) tg_id=%d username=%s gens=%d", i+1, u.TgID, textOrDash(u.Username.String, u.Username.Valid), u.GenCount))
 		}
 	}
+	if len(st.BySource) > 0 {
+		lines = append(lines, "Users by source_tag:")
+		for _, item := range st.BySource {
+			lines = append(lines, fmt.Sprintf("• %s: %d", item.SourceTag, item.UsersCount))
+		}
+	}
 	r.Bot.API.Send(tgbotapi.NewMessage(chatID, strings.Join(lines, "\n")))
 	return nil
 }
@@ -365,8 +399,8 @@ func (r *Router) getAdminFlow(adminTGID int64) (adminFlowState, bool) {
 }
 
 func parsePackageEditInput(raw string) (int64, admin.PackageInput, error) {
-	parts := splitInput(raw, 9)
-	if len(parts) != 9 {
+	parts := splitInput(raw, 8)
+	if len(parts) != 8 {
 		return 0, admin.PackageInput{}, fmt.Errorf("bad input")
 	}
 	id, err := strconv.ParseInt(parts[0], 10, 64)
@@ -381,27 +415,23 @@ func parsePackageEditInput(raw string) (int64, admin.PackageInput, error) {
 }
 
 func parsePackageInput(raw string) (admin.PackageInput, error) {
-	parts := splitInput(raw, 8)
-	if len(parts) != 8 {
+	parts := splitInput(raw, 7)
+	if len(parts) != 7 {
 		return admin.PackageInput{}, fmt.Errorf("bad input")
 	}
 	price, err := strconv.ParseInt(parts[2], 10, 32)
 	if err != nil {
 		return admin.PackageInput{}, err
 	}
-	txt, err := strconv.ParseInt(parts[4], 10, 32)
+	img, err := strconv.ParseInt(parts[4], 10, 32)
 	if err != nil {
 		return admin.PackageInput{}, err
 	}
-	img, err := strconv.ParseInt(parts[5], 10, 32)
+	vid, err := strconv.ParseInt(parts[5], 10, 32)
 	if err != nil {
 		return admin.PackageInput{}, err
 	}
-	vid, err := strconv.ParseInt(parts[6], 10, 32)
-	if err != nil {
-		return admin.PackageInput{}, err
-	}
-	active, err := parseBool(parts[7])
+	active, err := parseBool(parts[6])
 	if err != nil {
 		return admin.PackageInput{}, err
 	}
@@ -410,7 +440,7 @@ func parsePackageInput(raw string) (admin.PackageInput, error) {
 		Name:          parts[1],
 		PriceRub:      int32(price),
 		Currency:      parts[3],
-		AttemptsText:  int32(txt),
+		AttemptsText:  0,
 		AttemptsImage: int32(img),
 		AttemptsVideo: int32(vid),
 		IsActive:      active,
@@ -455,13 +485,12 @@ func splitInput(raw string, max int) []string {
 
 func formatPackage(p db.Package) string {
 	return fmt.Sprintf(
-		"id=%d code=%s name=%s price=%d %s text=%d image=%d video=%d active=%t created=%s updated=%s",
+		"id=%d code=%s name=%s price=%d %s image=%d video=%d active=%t created=%s updated=%s",
 		p.ID,
 		p.Code,
 		p.Title,
 		p.PriceRub,
 		p.Currency,
-		p.TextCredits,
 		p.ImageCredits,
 		p.VideoCredits,
 		p.IsActive,
@@ -478,7 +507,7 @@ func formatUserCard(card admin.UserCard) string {
 		fmt.Sprintf("username=%s", textOrDash(u.Username.String, u.Username.Valid)),
 		fmt.Sprintf("status=%s", card.Status),
 		fmt.Sprintf("registered_at=%s", formatTS(u.CreatedAt.Time, u.CreatedAt.Valid)),
-		fmt.Sprintf("balance: text=%d image=%d video=%d", u.TextBalance, u.ImageBalance, u.VideoBalance),
+		fmt.Sprintf("balance: image=%d video=%d", u.ImageBalance, u.VideoBalance),
 		fmt.Sprintf("last_package=%s", card.LastPackage),
 		fmt.Sprintf("total_generations=%d", card.TotalGenerates),
 	}

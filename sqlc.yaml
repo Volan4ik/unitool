@@ -5,6 +5,11 @@ sql:
     queries: "internal/db/queries/*.sql"
     schema:
       - "migrations/0001_schema.sql"
+      - "migrations/0002_order_manual_review.sql"
+      - "migrations/0003_rework_default_packages.sql"
+      - "migrations/0004_start_attribution.sql"
+      - "migrations/0005_refresh_packages_2026.sql"
+      - "migrations/0006_notifications_and_broadcasts.sql"
     gen:
       go:
         package: generated

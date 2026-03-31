@@ -43,6 +43,7 @@ const (
 	maxInlineImageBytes   = 15 * 1024 * 1024
 	maxProviderOutputSize = 512
 	staleFailReason       = "stale running job exhausted attempts"
+	promptRulesURL        = "https://example.com/prompt-rules"
 )
 
 var downloadMediaFn = downloadMediaBytes
@@ -116,7 +117,7 @@ func (s *Service) loop(ctx context.Context) {
 			continue
 		}
 
-		s.runClaimedJob(ctx, job)
+		s.runClaimedJob(ctx, generationJobFromClaimed(job))
 	}
 }
 
@@ -237,18 +238,18 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 	}
 
 	// Finalize generation request metrics/cost only for terminally-claimed runner.
-	var cImg, cVid pgtype.Int4
+	var cImg, cVid int32
 	switch job.Kind {
 	case "image":
-		cImg = pgtype.Int4{Int32: 1, Valid: true}
+		cImg = 1
 	case "video":
-		cVid = pgtype.Int4{Int32: 1, Valid: true}
+		cVid = 1
 	}
 	reqRows, err := s.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
 		ID:               job.GenerationRequestID,
 		OutputTokens:     pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
 		LatencyMs:        pgtype.Int4{Int32: latency, Valid: true},
-		CostCreditsText:  pgtype.Int4{},
+		CostCreditsText:  0,
 		CostCreditsImage: cImg,
 		CostCreditsVideo: cVid,
 	})
@@ -288,6 +289,10 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 
 func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob, callErr error, latency int32) {
 	errText := callErr.Error()
+	if isProviderModerationError(errText) {
+		s.finalizeFailedAttempt(ctx, job, errText, latency)
+		return
+	}
 	if int(job.Attempts) < int(job.MaxAttempts) {
 		backoff := time.Duration(job.Attempts*2) * time.Second
 		if backoff < time.Second {
@@ -405,10 +410,7 @@ func (s *Service) finalizeFailedSideEffects(
 	if !notifyUser {
 		return
 	}
-	msg := "Ошибка генерации медиа. Попытка возвращена."
-	if refundErr != nil {
-		msg = "Ошибка генерации медиа. Возврат попытки в обработке, попробуйте позже."
-	}
+	msg := userFailureMessage(errText, refundErr != nil)
 	if err := s.sendText(chatID, msg); err != nil {
 		log.Printf(
 			"generation: send failure notice failed job_id=%d gen_id=%d user_id=%d chat_id=%d kind=%s source=%s err=%v",
@@ -850,10 +852,63 @@ func downloadMediaBytes(ctx context.Context, rawURL string) ([]byte, string, err
 	return payload, resp.Header.Get("Content-Type"), nil
 }
 
+func generationJobFromClaimed(row db.ClaimNextGenerationJobRow) db.GenerationJob {
+	return db.GenerationJob{
+		ID:                  row.ID,
+		GenerationRequestID: row.GenerationRequestID,
+		UserID:              row.UserID,
+		ChatID:              row.ChatID,
+		ConversationID:      row.ConversationID,
+		Kind:                row.Kind,
+		Provider:            row.Provider,
+		Model:               row.Model,
+		Prompt:              row.Prompt,
+		Status:              row.Status,
+		ResultText:          row.ResultText,
+		ErrorMessage:        row.ErrorMessage,
+		Attempts:            row.Attempts,
+		MaxAttempts:         row.MaxAttempts,
+		NextAttemptAt:       row.NextAttemptAt,
+		CreatedAt:           row.CreatedAt,
+		UpdatedAt:           row.UpdatedAt,
+		FinishedAt:          row.FinishedAt,
+	}
+}
+
 func shortOutput(raw string) string {
 	r := strings.TrimSpace(raw)
 	if len(r) <= maxProviderOutputSize {
 		return r
 	}
 	return r[:maxProviderOutputSize] + "...(truncated)"
+}
+
+func isProviderModerationError(errText string) bool {
+	msg := strings.ToLower(strings.TrimSpace(errText))
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, "blocked by our moderation system") ||
+		strings.Contains(msg, "moderation system when checking inputs")
+}
+
+func userFailureMessage(errText string, refundPending bool) string {
+	if isProviderModerationError(errText) {
+		msg := fmt.Sprintf(
+			"Промпт не соответствует правилам сервиса. Измените описание и попробуйте снова.\nПравила: %s\nПопытка возвращена.",
+			promptRulesURL,
+		)
+		if refundPending {
+			msg = fmt.Sprintf(
+				"Промпт не соответствует правилам сервиса. Измените описание и попробуйте снова.\nПравила: %s\nВозврат попытки в обработке, попробуйте позже.",
+				promptRulesURL,
+			)
+		}
+		return msg
+	}
+
+	if refundPending {
+		return "Ошибка генерации медиа. Возврат попытки в обработке, попробуйте позже."
+	}
+	return "Ошибка генерации медиа. Попытка возвращена."
 }

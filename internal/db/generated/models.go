@@ -34,8 +34,8 @@ type CreditLedger struct {
 	DeltaVideo int32              `json:"delta_video"`
 	Reason     interface{}        `json:"reason"`
 	Meta       []byte             `json:"meta"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	OpKey      pgtype.Text        `json:"op_key"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type GenerationJob struct {
@@ -67,9 +67,9 @@ type GenerationRequest struct {
 	Provider         string             `json:"provider"`
 	Model            string             `json:"model"`
 	OutputTokens     pgtype.Int4        `json:"output_tokens"`
-	CostCreditsText  pgtype.Int4        `json:"cost_credits_text"`
-	CostCreditsImage pgtype.Int4        `json:"cost_credits_image"`
-	CostCreditsVideo pgtype.Int4        `json:"cost_credits_video"`
+	CostCreditsText  int32              `json:"cost_credits_text"`
+	CostCreditsImage int32              `json:"cost_credits_image"`
+	CostCreditsVideo int32              `json:"cost_credits_video"`
 	Status           interface{}        `json:"status"`
 	ErrorMessage     pgtype.Text        `json:"error_message"`
 	LatencyMs        pgtype.Int4        `json:"latency_ms"`
@@ -148,4 +148,12 @@ type UserSession struct {
 	Model     string             `json:"model"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserStartAttribution struct {
+	UserID    int64              `json:"user_id"`
+	TgID      int64              `json:"tg_id"`
+	Username  pgtype.Text        `json:"username"`
+	SourceTag string             `json:"source_tag"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }

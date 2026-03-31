@@ -91,6 +91,17 @@ WHERE o.user_id = $1
 ORDER BY o.paid_at DESC NULLS LAST, o.created_at DESC
 LIMIT 1;
 
+-- name: TrackUserStartAttribution :execrows
+INSERT INTO user_start_attribution (user_id, tg_id, username, source_tag)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (user_id) DO NOTHING;
+
+-- name: CountUsersBySourceTag :many
+SELECT source_tag, COUNT(*)::bigint AS users_count
+FROM user_start_attribution
+GROUP BY source_tag
+ORDER BY users_count DESC, source_tag ASC;
+
 -- name: TopUsersByGenerationCount :many
 SELECT
   u.id,

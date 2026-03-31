@@ -29,6 +29,7 @@ type Router struct {
 	Admin         *admin.Service
 	Pay           *payments.Service
 	Q             *db.Queries
+	Notifier      BroadcastScheduler
 	Prov          provider.ModelProvider
 	RL            *rate.Limiter
 	Moderation    moderation.Client
@@ -51,9 +52,15 @@ type adminFlowState struct {
 	Action string
 }
 
+type BroadcastScheduler interface {
+	EnqueueBroadcast(ctx context.Context, createdByTGID int64, text string) (int64, error)
+}
+
 const (
 	tgMessageLimit     = 4096
 	tgEditPreviewLimit = 4000
+	defaultSourceTag   = "organic"
+	maxSourceTagLen    = 64
 )
 
 var errEmptyModelResponse = errors.New("empty model response")
@@ -130,7 +137,14 @@ func (r *Router) HandleUpdate(ctx context.Context, upd tgbotapi.Update) error {
 func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID int64) error {
 	switch m.Command() {
 	case "start":
-		greet := tgbotapi.NewMessage(m.Chat.ID, "Привет! Выберите действие")
+		if err := r.trackStartSource(ctx, userID, m); err != nil {
+			tgID := int64(0)
+			if m.From != nil {
+				tgID = m.From.ID
+			}
+			log.Printf("track start source failed user_id=%d tg_id=%d err=%v", userID, tgID, err)
+		}
+		greet := tgbotapi.NewMessage(m.Chat.ID, startGreetingText(m))
 		greet.ReplyMarkup = MainReplyKeyboard()
 		if _, err := r.Bot.API.Send(greet); err != nil {
 			return err
@@ -153,31 +167,75 @@ func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID 
 	return nil
 }
 
+func startGreetingText(m *tgbotapi.Message) string {
+	if m != nil && m.From != nil {
+		firstName := strings.TrimSpace(m.From.FirstName)
+		if firstName != "" {
+			return fmt.Sprintf("Привет, %s!\nВыберите действие", firstName)
+		}
+	}
+	return "Привет! Выберите действие"
+}
+
 func buildHelpText() string {
 	imageModels := strings.Join(ModelUIList("image"), ", ")
 	videoModels := strings.Join(ModelUIList("video"), ", ")
 
 	return fmt.Sprintf(
 		"Как пользоваться ботом:\n\n"+
-			"1. Нажмите «Создать картинку» или «Создать видео».\n"+
-			"2. Выберите модель в меню «Модели».\n"+
-			"3. Отправьте текст промпта в чат.\n\n"+
-			"Доступные модели:\n"+
+			"1. Нажмите «Фото» или «Видео».\n"+
+			"2. Выберите модель.\n"+
+			"3. Отправьте описание.\n\n"+
+			"Модели:\n"+
 			"Фото: %s\n"+
 			"Видео: %s\n\n"+
-			"Видео с референсом:\n"+
-			"Добавьте отдельную строку в промпте:\n"+
+			"Для видео с референсом:\n"+
 			"input_reference=https://example.com/ref.png\n"+
-			"Ниже напишите описание сцены.\n\n"+
-			"Полезное:\n"+
-			"• «Мой профиль» — остаток генераций.\n"+
-			"• «Купить» — доступные пакеты.\n\n"+
-			"Команды:\n"+
-			"/start — главное меню\n"+
-			"/help — эта подсказка",
+			"и на следующей строке ваш промпт.\n\n"+
+			"«Профиль» — баланс, «Купить» — пакеты.",
 		imageModels,
 		videoModels,
 	)
+}
+
+func (r *Router) trackStartSource(ctx context.Context, userID int64, m *tgbotapi.Message) error {
+	if r == nil || r.Q == nil || m == nil || m.From == nil || userID == 0 {
+		return nil
+	}
+	sourceTag := normalizeSourceTag(m.CommandArguments())
+	username := strings.TrimSpace(m.From.UserName)
+
+	_, err := r.Q.TrackUserStartAttribution(ctx, db.TrackUserStartAttributionParams{
+		UserID:    userID,
+		TgID:      m.From.ID,
+		Username:  pgtype.Text{String: username, Valid: username != ""},
+		SourceTag: sourceTag,
+	})
+	return err
+}
+
+func normalizeSourceTag(raw string) string {
+	tag := strings.ToLower(strings.TrimSpace(raw))
+	if tag == "" {
+		return defaultSourceTag
+	}
+
+	// Keep tags safe and predictable for reporting keys.
+	var b strings.Builder
+	b.Grow(len(tag))
+	for _, r := range tag {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
+			b.WriteRune(r)
+		}
+	}
+	clean := b.String()
+	if clean == "" {
+		return defaultSourceTag
+	}
+	if len(clean) > maxSourceTagLen {
+		clean = clean[:maxSourceTagLen]
+	}
+	return clean
 }
 
 func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID int64) error {
@@ -192,24 +250,22 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 		}
 	}
 	switch txt {
-	case "Создать картинку":
+	case "Фото", "Создать картинку":
 		return r.selectMode(ctx, m.Chat.ID, userID, "image")
-	case "Создать видео":
+	case "Видео", "Создать видео":
 		return r.selectMode(ctx, m.Chat.ID, userID, "video")
-	case "Мой профиль":
+	case "Профиль", "Мой профиль":
 		bal, err := r.Q.GetBalancesByUserID(ctx, userID)
 		if err != nil {
 			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Ошибка профиля: %v", err)))
 			return err
 		}
-		text := fmt.Sprintf("Доступно генераций:\n • Фото: %d\n • Видео: %d", bal.ImageBalance, bal.VideoBalance)
+		text := fmt.Sprintf("Баланс:\n• Фото: %d\n• Видео: %d", bal.ImageBalance, bal.VideoBalance)
 		msg := tgbotapi.NewMessage(m.Chat.ID, text)
-		msg.ReplyMarkup = MainReplyKeyboard()
-		buyBtn := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("Купить", "buy:menu")))
+		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("Купить пакеты", "buy:menu")),
+		)
 		r.Bot.API.Send(msg)
-		msg2 := tgbotapi.NewMessage(m.Chat.ID, "Вы можете приобрести пакеты:")
-		msg2.ReplyMarkup = buyBtn
-		r.Bot.API.Send(msg2)
 		return nil
 	case "Купить":
 		return r.showPackages(ctx, m.Chat.ID)
@@ -454,14 +510,14 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 		return nil
 	}
 
-	cText := pgtype.Int4{Int32: 1, Valid: true}
+	cText := int32(1)
 	if rows, finishErr := r.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
 		ID:               gr.ID,
 		OutputTokens:     pgtype.Int4{Int32: int32(resp.Tokens), Valid: resp.Tokens > 0},
 		LatencyMs:        pgtype.Int4{Int32: int32(latency), Valid: true},
 		CostCreditsText:  cText,
-		CostCreditsImage: pgtype.Int4{},
-		CostCreditsVideo: pgtype.Int4{},
+		CostCreditsImage: 0,
+		CostCreditsVideo: 0,
 	}); finishErr != nil {
 		log.Printf("sync-generation: finish request failed gen_id=%d err=%v", gr.ID, finishErr)
 	} else if rows == 0 {
@@ -700,12 +756,7 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 		if mode == "video" {
 			break
 		}
-		noteText := fmt.Sprintf("Напишите промпт для %s — я отвечу в этом чате.", kindToRus(mode))
-		note := tgbotapi.NewMessage(chatID, noteText)
-		note.ReplyMarkup = MainReplyKeyboard()
-		if _, err := r.Bot.API.Send(note); err != nil {
-			return err
-		}
+		_, _ = r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Режим %s включён. Отправьте описание.", kindToRus(mode))))
 	case "buy":
 		if len(parts) < 2 {
 			return nil
@@ -738,14 +789,9 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 
 func (r *Router) sendModelsMenu(chatID int64, mode, selected string) error {
 	kb := ModelsInlineKeyboard(mode, selected)
-	msg := tgbotapi.NewMessage(chatID, "Выберите модель")
-	msg.ReplyMarkup = MainReplyKeyboard()
+	msg := tgbotapi.NewMessage(chatID, "Выберите модель:")
+	msg.ReplyMarkup = kb
 	if _, err := r.Bot.API.Send(msg); err != nil {
-		return err
-	}
-	msg2 := tgbotapi.NewMessage(chatID, "Модели:")
-	msg2.ReplyMarkup = kb
-	if _, err := r.Bot.API.Send(msg2); err != nil {
 		return err
 	}
 	return nil
@@ -762,23 +808,32 @@ func (r *Router) showPackages(ctx context.Context, chatID int64) error {
 		return nil
 	}
 
-	lines := make([]string, 0, len(pkgs))
-	codes := make([]string, 0, len(pkgs))
+	photoLines := make([]string, 0, len(pkgs))
+	videoLines := make([]string, 0, len(pkgs))
+	comboLines := make([]string, 0, len(pkgs))
+	buttons := make([]PackageButton, 0, len(pkgs))
 	for _, p := range pkgs {
-		lines = append(lines, formatPackageOfferLine(p))
-		codes = append(codes, p.Code)
+		switch {
+		case p.ImageCredits > 0 && p.VideoCredits == 0:
+			photoLines = append(photoLines, formatPackageOfferLine(p))
+		case p.VideoCredits > 0 && p.ImageCredits == 0:
+			videoLines = append(videoLines, formatPackageOfferLine(p))
+		case p.ImageCredits > 0 && p.VideoCredits > 0:
+			comboLines = append(comboLines, formatPackageOfferLine(p))
+		default:
+			comboLines = append(comboLines, formatPackageOfferLine(p))
+		}
+		buttons = append(buttons, PackageButton{
+			Code:  p.Code,
+			Label: packageButtonLabel(p),
+		})
 	}
 
-	text := "Выберите пакет:\n" + strings.Join(lines, "\n")
-	kb := PackagesInlineKeyboard(codes)
+	text := buildPackagesMenuText(photoLines, videoLines, comboLines)
+	kb := PackagesInlineKeyboard(buttons)
 	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ReplyMarkup = MainReplyKeyboard()
+	msg.ReplyMarkup = kb
 	if _, err := r.Bot.API.Send(msg); err != nil {
-		return err
-	}
-	msg2 := tgbotapi.NewMessage(chatID, "Пакеты:")
-	msg2.ReplyMarkup = kb
-	if _, err := r.Bot.API.Send(msg2); err != nil {
 		return err
 	}
 	return nil
@@ -788,15 +843,55 @@ func formatPackageOfferLine(p db.Package) string {
 	switch {
 	case p.ImageCredits > 0 && p.VideoCredits == 0:
 		unit := float64(p.PriceRub) / float64(p.ImageCredits)
-		return fmt.Sprintf("• %s — %s: %d фото за %d ₽ (%.2f ₽/фото)", p.Code, p.Title, p.ImageCredits, p.PriceRub, unit)
+		return fmt.Sprintf("• %s — %d фото · %d ₽ (%.2f ₽/фото)", p.Title, p.ImageCredits, p.PriceRub, unit)
 	case p.VideoCredits > 0 && p.ImageCredits == 0:
 		unit := float64(p.PriceRub) / float64(p.VideoCredits)
-		return fmt.Sprintf("• %s — %s: %d видео за %d ₽ (%.2f ₽/видео)", p.Code, p.Title, p.VideoCredits, p.PriceRub, unit)
+		return fmt.Sprintf("• %s — %d видео · %d ₽ (%.2f ₽/видео)", p.Title, p.VideoCredits, p.PriceRub, unit)
 	case p.ImageCredits > 0 && p.VideoCredits > 0:
-		return fmt.Sprintf("• %s — %s: %d фото + %d видео за %d ₽", p.Code, p.Title, p.ImageCredits, p.VideoCredits, p.PriceRub)
+		title := p.Title
+		if isMostPopularTitle(title) {
+			title = "🔥 " + title
+		}
+		return fmt.Sprintf("• %s — %d фото + %d видео · %d ₽", title, p.ImageCredits, p.VideoCredits, p.PriceRub)
 	default:
-		return fmt.Sprintf("• %s — %s: %d ₽", p.Code, p.Title, p.PriceRub)
+		return fmt.Sprintf("• %s — %d ₽", p.Title, p.PriceRub)
 	}
+}
+
+func packageButtonLabel(p db.Package) string {
+	switch {
+	case p.ImageCredits > 0 && p.VideoCredits == 0:
+		return fmt.Sprintf("📷 %s · %d фото · %d ₽", p.Title, p.ImageCredits, p.PriceRub)
+	case p.VideoCredits > 0 && p.ImageCredits == 0:
+		return fmt.Sprintf("🎬 %s · %d видео · %d ₽", p.Title, p.VideoCredits, p.PriceRub)
+	case p.ImageCredits > 0 && p.VideoCredits > 0:
+		title := p.Title
+		if isMostPopularTitle(title) {
+			title = "🔥 " + strings.TrimSpace(strings.ReplaceAll(title, "(Most Popular)", ""))
+		}
+		return fmt.Sprintf("✨ %s · %d+%d · %d ₽", title, p.ImageCredits, p.VideoCredits, p.PriceRub)
+	default:
+		return p.Title
+	}
+}
+
+func buildPackagesMenuText(photoLines, videoLines, comboLines []string) string {
+	parts := []string{"Тарифы"}
+	if len(photoLines) > 0 {
+		parts = append(parts, "", "📷 Фото", strings.Join(photoLines, "\n"))
+	}
+	if len(videoLines) > 0 {
+		parts = append(parts, "", "🎬 Видео", strings.Join(videoLines, "\n"))
+	}
+	if len(comboLines) > 0 {
+		parts = append(parts, "", "✨ Комбо", strings.Join(comboLines, "\n"))
+	}
+	parts = append(parts, "", "Чем больше пакет, тем выгоднее цена за попытку.")
+	return strings.Join(parts, "\n")
+}
+
+func isMostPopularTitle(title string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(title)), "most popular")
 }
 
 func (r *Router) ensureConvID(ctx context.Context, userID int64, kind string) (uuid.UUID, error) {
@@ -894,7 +989,7 @@ func (r *Router) getOrCreateGenerationRequest(
 	if updateID > 0 {
 		existing, err := r.Q.GetGenerationRequestByUpdateID(ctx, toInt8(updateID))
 		if err == nil {
-			return existing, false, nil
+			return generationRequestFromExisting(existing), false, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return db.GenerationRequest{}, false, err
@@ -903,18 +998,58 @@ func (r *Router) getOrCreateGenerationRequest(
 
 	gr, err := r.Q.InsertGenerationRequest(ctx, params)
 	if err == nil {
-		return gr, true, nil
+		return generationRequestFromInsert(gr), true, nil
 	}
 	if updateID > 0 && isUniqueViolation(err) {
 		existing, gerr := r.Q.GetGenerationRequestByUpdateID(ctx, toInt8(updateID))
 		if gerr == nil {
-			return existing, false, nil
+			return generationRequestFromExisting(existing), false, nil
 		}
 		if !errors.Is(gerr, pgx.ErrNoRows) {
 			return db.GenerationRequest{}, false, gerr
 		}
 	}
 	return db.GenerationRequest{}, false, err
+}
+
+func generationRequestFromExisting(row db.GetGenerationRequestByUpdateIDRow) db.GenerationRequest {
+	return db.GenerationRequest{
+		ID:               row.ID,
+		UserID:           row.UserID,
+		UpdateID:         row.UpdateID,
+		Kind:             row.Kind,
+		Provider:         row.Provider,
+		Model:            row.Model,
+		OutputTokens:     row.OutputTokens,
+		CostCreditsText:  row.CostCreditsText,
+		CostCreditsImage: row.CostCreditsImage,
+		CostCreditsVideo: row.CostCreditsVideo,
+		Status:           row.Status,
+		ErrorMessage:     row.ErrorMessage,
+		LatencyMs:        row.LatencyMs,
+		CreatedAt:        row.CreatedAt,
+		FinishedAt:       row.FinishedAt,
+	}
+}
+
+func generationRequestFromInsert(row db.InsertGenerationRequestRow) db.GenerationRequest {
+	return db.GenerationRequest{
+		ID:               row.ID,
+		UserID:           row.UserID,
+		UpdateID:         row.UpdateID,
+		Kind:             row.Kind,
+		Provider:         row.Provider,
+		Model:            row.Model,
+		OutputTokens:     row.OutputTokens,
+		CostCreditsText:  row.CostCreditsText,
+		CostCreditsImage: row.CostCreditsImage,
+		CostCreditsVideo: row.CostCreditsVideo,
+		Status:           row.Status,
+		ErrorMessage:     row.ErrorMessage,
+		LatencyMs:        row.LatencyMs,
+		CreatedAt:        row.CreatedAt,
+		FinishedAt:       row.FinishedAt,
+	}
 }
 
 func generationRequestStatus(status interface{}) string {

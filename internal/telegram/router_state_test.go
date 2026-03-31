@@ -157,6 +157,9 @@ type fakeDBTX struct {
 	enqueueGenerationJobCalls   int
 	lastFailedGenerationStatus  string
 	lastFailedGenerationMessage string
+	startSourceByUser           map[int64]string
+	trackStartSourceCalls       int
+	lastStartSourceTag          string
 }
 
 func newFakeDBTX() *fakeDBTX {
@@ -203,6 +206,7 @@ func newFakeDBTX() *fakeDBTX {
 			CreatedAt:           now,
 			UpdatedAt:           now,
 		},
+		startSourceByUser: make(map[int64]string),
 	}
 }
 
@@ -235,6 +239,16 @@ func (f *fakeDBTX) Exec(_ context.Context, query string, args ...interface{}) (p
 		return pgconn.NewCommandTag("UPDATE 1"), nil
 	case strings.Contains(query, "name: RefundText"):
 		f.refundTextCalls++
+		return pgconn.NewCommandTag("INSERT 0 1"), nil
+	case strings.Contains(query, "name: TrackUserStartAttribution"):
+		f.trackStartSourceCalls++
+		userID, _ := args[0].(int64)
+		sourceTag, _ := args[3].(string)
+		f.lastStartSourceTag = sourceTag
+		if _, exists := f.startSourceByUser[userID]; exists {
+			return pgconn.NewCommandTag("INSERT 0 0"), nil
+		}
+		f.startSourceByUser[userID] = sourceTag
 		return pgconn.NewCommandTag("INSERT 0 1"), nil
 	default:
 		return pgconn.CommandTag{}, fmt.Errorf("unexpected exec query: %s", firstLine(query))
@@ -485,6 +499,85 @@ func newTestRouter(t *testing.T, q *db.Queries, prov provider.ModelProvider) (*R
 
 	router := NewRouter(&Bot{API: api}, nil, nil, nil, q, prov, nil, nil, 0, 0)
 	return router, client
+}
+
+func TestStartCommandTracksOrganicSourceByDefault(t *testing.T) {
+	ctx := context.Background()
+	dbtx := newFakeDBTX()
+	q := db.New(dbtx)
+	prov := &fakeProvider{}
+	router, client := newTestRouter(t, q, prov)
+
+	if err := router.handleCommand(ctx, &tgbotapi.Message{
+		Text: "/start",
+		Entities: []tgbotapi.MessageEntity{
+			{
+				Type:   "bot_command",
+				Offset: 0,
+				Length: len("/start"),
+			},
+		},
+		From: &tgbotapi.User{ID: dbtx.user.TgID, UserName: "tester", FirstName: "Test"},
+		Chat: &tgbotapi.Chat{ID: 100, Type: "private"},
+	}, dbtx.user.ID); err != nil {
+		t.Fatalf("handleCommand: %v", err)
+	}
+
+	if got := dbtx.startSourceByUser[dbtx.user.ID]; got != "organic" {
+		t.Fatalf("expected organic source_tag, got %q", got)
+	}
+	texts := client.textsForMethod("sendMessage")
+	if len(texts) == 0 {
+		t.Fatal("expected /start to send greeting")
+	}
+	got := texts[len(texts)-1]
+	if !strings.Contains(got, "Привет, Test!") {
+		t.Fatalf("expected personalized greeting, got %q", got)
+	}
+}
+
+func TestStartCommandDoesNotOverwriteSourceTag(t *testing.T) {
+	ctx := context.Background()
+	dbtx := newFakeDBTX()
+	q := db.New(dbtx)
+	prov := &fakeProvider{}
+	router, _ := newTestRouter(t, q, prov)
+
+	first := &tgbotapi.Message{
+		Text: "/start ad_tiktok",
+		Entities: []tgbotapi.MessageEntity{
+			{
+				Type:   "bot_command",
+				Offset: 0,
+				Length: len("/start"),
+			},
+		},
+		From: &tgbotapi.User{ID: dbtx.user.TgID, UserName: "tester"},
+		Chat: &tgbotapi.Chat{ID: 100, Type: "private"},
+	}
+	second := &tgbotapi.Message{
+		Text: "/start ad_google",
+		Entities: []tgbotapi.MessageEntity{
+			{
+				Type:   "bot_command",
+				Offset: 0,
+				Length: len("/start"),
+			},
+		},
+		From: &tgbotapi.User{ID: dbtx.user.TgID, UserName: "tester"},
+		Chat: &tgbotapi.Chat{ID: 100, Type: "private"},
+	}
+
+	if err := router.handleCommand(ctx, first, dbtx.user.ID); err != nil {
+		t.Fatalf("first handleCommand: %v", err)
+	}
+	if err := router.handleCommand(ctx, second, dbtx.user.ID); err != nil {
+		t.Fatalf("second handleCommand: %v", err)
+	}
+
+	if got := dbtx.startSourceByUser[dbtx.user.ID]; got != "ad_tiktok" {
+		t.Fatalf("source_tag should not be overwritten, got %q", got)
+	}
 }
 
 func TestHelpCommandSendsUsageGuide(t *testing.T) {

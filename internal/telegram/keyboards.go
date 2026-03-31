@@ -6,11 +6,11 @@ import (
 
 func MainReplyKeyboard() tgbotapi.ReplyKeyboardMarkup {
 	row1 := tgbotapi.NewKeyboardButtonRow(
-		tgbotapi.NewKeyboardButton("Создать картинку"),
-		tgbotapi.NewKeyboardButton("Создать видео"),
+		tgbotapi.NewKeyboardButton("Фото"),
+		tgbotapi.NewKeyboardButton("Видео"),
 	)
 	row2 := tgbotapi.NewKeyboardButtonRow(
-		tgbotapi.NewKeyboardButton("Мой профиль"),
+		tgbotapi.NewKeyboardButton("Профиль"),
 		tgbotapi.NewKeyboardButton("Купить"),
 	)
 	kb := tgbotapi.NewReplyKeyboard(row1, row2)
@@ -47,16 +47,21 @@ func ModelsInlineKeyboard(mode string, selected string) tgbotapi.InlineKeyboardM
 	return tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-func PackagesInlineKeyboard(codes []string) tgbotapi.InlineKeyboardMarkup {
+type PackageButton struct {
+	Code  string
+	Label string
+}
+
+func PackagesInlineKeyboard(items []PackageButton) tgbotapi.InlineKeyboardMarkup {
 	rows := [][]tgbotapi.InlineKeyboardButton{}
-	row := []tgbotapi.InlineKeyboardButton{}
-	for i, code := range codes {
-		label := code
-		row = append(row, tgbotapi.NewInlineKeyboardButtonData(label, "buy:"+code))
-		if len(row) == 3 || i == len(codes)-1 {
-			rows = append(rows, row)
-			row = []tgbotapi.InlineKeyboardButton{}
+	for _, item := range items {
+		label := item.Label
+		if label == "" {
+			label = item.Code
 		}
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, "buy:"+item.Code),
+		))
 	}
 	return tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
@@ -70,6 +75,9 @@ func AdminMainInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("Stats", "admin:stats"),
 			tgbotapi.NewInlineKeyboardButtonData("Ban / Unban", "admin:ban"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Broadcast", "admin:broadcast"),
 		),
 	)
 }

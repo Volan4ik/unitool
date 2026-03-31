@@ -666,6 +666,46 @@ func TestHandleFailedAttemptRefundFailureUsesPendingMessage(t *testing.T) {
 	}
 }
 
+func TestHandleFailedAttemptModerationSkipsRetryAndNotifies(t *testing.T) {
+	fakeTG := newFakeTelegramAPI()
+	fakeDB := &fakeGenerationDBTX{
+		markFailedRows: 1,
+	}
+	svc := &Service{
+		Bot: newTestBot(t, fakeTG),
+		Q:   db.New(fakeDB),
+	}
+	job := db.GenerationJob{
+		ID:                  107,
+		GenerationRequestID: 207,
+		UserID:              307,
+		ChatID:              407,
+		Kind:                "video",
+		Attempts:            1,
+		MaxAttempts:         3,
+	}
+	moderationErr := errors.New("comet video failed: The request is blocked by our moderation system when checking inputs. Possible reasons: sexual.")
+
+	svc.handleFailedAttempt(context.Background(), job, moderationErr, 100)
+
+	if fakeDB.requeueCalls != 0 {
+		t.Fatalf("expected no requeue for moderation error, got requeue=%d", fakeDB.requeueCalls)
+	}
+	if fakeDB.markFailedCalls != 1 || fakeDB.failReqCalls != 1 || fakeDB.refundCalls != 1 {
+		t.Fatalf("expected finalization calls markFailed=1 failReq=1 refund=1, got markFailed=%d failReq=%d refund=%d", fakeDB.markFailedCalls, fakeDB.failReqCalls, fakeDB.refundCalls)
+	}
+	if got := fakeTG.callCount("sendMessage"); got != 1 {
+		t.Fatalf("expected one user message, got sendMessage=%d", got)
+	}
+	msg := fakeTG.lastText()
+	if !strings.Contains(msg, "Промпт не соответствует правилам сервиса") {
+		t.Fatalf("expected moderation notice, got %q", msg)
+	}
+	if !strings.Contains(msg, promptRulesURL) {
+		t.Fatalf("expected rules link in moderation notice, got %q", msg)
+	}
+}
+
 func TestProcessJobMarkDoneNoRowsSkipsSuccessSideEffects(t *testing.T) {
 	fakeTG := newFakeTelegramAPI()
 	fakeDB := &fakeGenerationDBTX{

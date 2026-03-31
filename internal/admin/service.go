@@ -43,6 +43,7 @@ type Stats struct {
 	New7d      int64
 	TotalGens  int64
 	TopUsers   []db.TopUsersByGenerationCountRow
+	BySource   []db.CountUsersBySourceTagRow
 }
 
 func NewService(q *db.Queries) *Service {
@@ -201,6 +202,10 @@ func (s *Service) GetStats(ctx context.Context, topN int32) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
+	bySource, err := s.Q.CountUsersBySourceTag(ctx)
+	if err != nil {
+		return Stats{}, err
+	}
 	return Stats{
 		TotalUsers: total,
 		Active:     active,
@@ -209,6 +214,7 @@ func (s *Service) GetStats(ctx context.Context, topN int32) (Stats, error) {
 		New7d:      new7d,
 		TotalGens:  totalGens,
 		TopUsers:   top,
+		BySource:   bySource,
 	}, nil
 }
 
@@ -247,6 +253,12 @@ func validatePackageInput(in PackageInput) (db.CreatePackageParams, error) {
 	}
 	if in.PriceRub < 0 || in.AttemptsText < 0 || in.AttemptsImage < 0 || in.AttemptsVideo < 0 {
 		return db.CreatePackageParams{}, errors.New("numeric values must be >= 0")
+	}
+	if in.AttemptsText != 0 {
+		return db.CreatePackageParams{}, errors.New("text attempts are deprecated; use image/video only")
+	}
+	if in.AttemptsImage == 0 && in.AttemptsVideo == 0 {
+		return db.CreatePackageParams{}, errors.New("package must include image and/or video attempts")
 	}
 	if len(curr) != 3 {
 		return db.CreatePackageParams{}, errors.New("currency must be 3-letter code")
