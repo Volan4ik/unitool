@@ -12,6 +12,7 @@ import (
 
 type Querier interface {
 	AddPurchaseCredits(ctx context.Context, arg AddPurchaseCreditsParams) (int64, error)
+	AddSignupBonus(ctx context.Context, arg AddSignupBonusParams) (int64, error)
 	BeginUpdateProcessing(ctx context.Context, arg BeginUpdateProcessingParams) (int64, error)
 	ClaimNextGenerationJob(ctx context.Context) (ClaimNextGenerationJobRow, error)
 	CountActiveUsers(ctx context.Context) (int64, error)

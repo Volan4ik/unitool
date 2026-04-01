@@ -37,9 +37,6 @@ type Config struct {
 	JobWorkers      int           `envconfig:"JOB_WORKERS" default:"4"`
 	JobPollMs       int           `envconfig:"JOB_POLL_MS" default:"700"`
 	MediaGenTimeout time.Duration `envconfig:"MEDIA_GEN_TIMEOUT" default:"120s"`
-	// Weekly free text generations
-	WeeklyTextGenerations int    `envconfig:"WEEKLY_TEXT_GENERATIONS" default:"100"`
-	WeeklyCronAtUTC       string `envconfig:"WEEKLY_CRON_AT_UTC" default:"Mon 03:00"`
 	// OpenAI Moderation API
 	ModerationEnabled bool          `envconfig:"MODERATION_ENABLED" default:"false"`
 	OpenAIBase        string        `envconfig:"OPENAI_API_BASE" default:"https://api.openai.com"`

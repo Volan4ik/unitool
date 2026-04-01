@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"strings"
 	"sync"
@@ -61,6 +62,7 @@ const (
 	tgEditPreviewLimit = 4000
 	defaultSourceTag   = "organic"
 	maxSourceTagLen    = 64
+	supportContact     = "@helpper"
 )
 
 var errEmptyModelResponse = errors.New("empty model response")
@@ -145,16 +147,14 @@ func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID 
 			log.Printf("track start source failed user_id=%d tg_id=%d err=%v", userID, tgID, err)
 		}
 		greet := tgbotapi.NewMessage(m.Chat.ID, startGreetingText(m))
+		greet.ParseMode = tgbotapi.ModeHTML
+		greet.DisableWebPagePreview = true
 		greet.ReplyMarkup = MainReplyKeyboard()
 		if _, err := r.Bot.API.Send(greet); err != nil {
 			return err
 		}
 	case "help":
-		help := tgbotapi.NewMessage(m.Chat.ID, buildHelpText())
-		help.ReplyMarkup = MainReplyKeyboard()
-		if _, err := r.Bot.API.Send(help); err != nil {
-			return err
-		}
+		return r.sendHelpMessage(m.Chat.ID)
 	case "admin":
 		return r.handleAdminCommand(ctx, m)
 	default:
@@ -168,13 +168,26 @@ func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID 
 }
 
 func startGreetingText(m *tgbotapi.Message) string {
+	name := ""
 	if m != nil && m.From != nil {
-		firstName := strings.TrimSpace(m.From.FirstName)
-		if firstName != "" {
-			return fmt.Sprintf("Привет, %s!\nВыберите действие", firstName)
-		}
+		name = strings.TrimSpace(m.From.FirstName)
 	}
-	return "Привет! Выберите действие"
+	if name != "" {
+		name = html.EscapeString(name) + ", добро пожаловать!"
+	} else {
+		name = "Добро пожаловать!"
+	}
+
+	return fmt.Sprintf(
+		"%s\n\n"+
+			"Мы сделали этого бота чтобы любой пользователь интернета мог получить доступ к современным моделям для генерации фото и видео БЕЗ впн'а, сложных регистраций, поисков иностранных карт и траты кучи денег на подписки.\n\n"+
+			"Что он умеет?\n"+
+			"- Генерация изображений любой сложности с помощью Nano Banana / Chat GPT / Midjourney\n"+
+			"- Cоздание анимаций и видео с помощью Veo3 / Sora / Kling\n\n"+
+			"Продолжая использование Вы принимаете пользовательское <a href=\"https://example.com\">соглашение</a>.\n\n"+
+			"Так как Вы пришли от наших друзей, мы дарим Вам тестовые 5 генераций. Приступим?",
+		name,
+	)
 }
 
 func buildHelpText() string {
@@ -184,18 +197,31 @@ func buildHelpText() string {
 	return fmt.Sprintf(
 		"Как пользоваться ботом:\n\n"+
 			"1. Нажмите «Фото» или «Видео».\n"+
-			"2. Выберите модель.\n"+
-			"3. Отправьте описание.\n\n"+
-			"Модели:\n"+
+			"2. Выберите подходящую модель.\n"+
+			"3. Напишите обычным сообщением, что хотите получить.\n\n"+
+			"Если делаете видео по картинке, отправьте так:\n"+
+			"input_reference=https://example.com/ref.png\n"+
+			"и на следующей строке опишите, что должно получиться.\n\n"+
+			"Доступные модели:\n"+
 			"Фото: %s\n"+
 			"Видео: %s\n\n"+
-			"Для видео с референсом:\n"+
-			"input_reference=https://example.com/ref.png\n"+
-			"и на следующей строке ваш промпт.\n\n"+
-			"«Профиль» — баланс, «Купить» — пакеты.",
+			"Где что находится:\n"+
+			"«Профиль» — ваш баланс и поддержка.\n"+
+			"«Купить» — пакеты генераций.\n\n"+
+			"Поддержка: %s",
 		imageModels,
 		videoModels,
+		supportContact,
 	)
+}
+
+func (r *Router) sendHelpMessage(chatID int64) error {
+	help := tgbotapi.NewMessage(chatID, buildHelpText())
+	help.ReplyMarkup = MainReplyKeyboard()
+	if _, err := r.Bot.API.Send(help); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *Router) trackStartSource(ctx context.Context, userID int64, m *tgbotapi.Message) error {
@@ -255,18 +281,7 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 	case "Видео", "Создать видео":
 		return r.selectMode(ctx, m.Chat.ID, userID, "video")
 	case "Профиль", "Мой профиль":
-		bal, err := r.Q.GetBalancesByUserID(ctx, userID)
-		if err != nil {
-			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Ошибка профиля: %v", err)))
-			return err
-		}
-		text := fmt.Sprintf("Баланс:\n• Фото: %d\n• Видео: %d", bal.ImageBalance, bal.VideoBalance)
-		msg := tgbotapi.NewMessage(m.Chat.ID, text)
-		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("Купить пакеты", "buy:menu")),
-		)
-		r.Bot.API.Send(msg)
-		return nil
+		return r.showProfile(ctx, m.Chat.ID, userID)
 	case "Купить":
 		return r.showPackages(ctx, m.Chat.ID)
 	}
@@ -638,7 +653,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 		return nil
 	}
 
-	ack := "Задача принята. Начал генерацию, пришлю результат сюда по готовности."
+	ack := "Анализирую ваш запрос..."
 	if !created {
 		ack = "Запрос уже был принят ранее. Продолжаю обработку, результат пришлю сюда."
 	}
@@ -782,6 +797,15 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 			r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка оплаты: %v", err)))
 			return err
 		}
+	case "support":
+		if len(parts) < 2 {
+			return nil
+		}
+		if parts[1] == "help" {
+			if err := r.sendHelpMessage(chatID); err != nil {
+				return err
+			}
+		}
 	}
 	r.Bot.API.Request(tgbotapi.NewCallback(cq.ID, ""))
 	return nil
@@ -791,6 +815,22 @@ func (r *Router) sendModelsMenu(chatID int64, mode, selected string) error {
 	kb := ModelsInlineKeyboard(mode, selected)
 	msg := tgbotapi.NewMessage(chatID, "Выберите модель:")
 	msg.ReplyMarkup = kb
+	if _, err := r.Bot.API.Send(msg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *Router) showProfile(ctx context.Context, chatID, userID int64) error {
+	bal, err := r.Q.GetBalancesByUserID(ctx, userID)
+	if err != nil {
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка профиля: %v", err)))
+		return err
+	}
+
+	text := fmt.Sprintf("Баланс:\n• Фото: %d\n• Видео: %d", bal.ImageBalance, bal.VideoBalance)
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ReplyMarkup = ProfileInlineKeyboard()
 	if _, err := r.Bot.API.Send(msg); err != nil {
 		return err
 	}

@@ -30,7 +30,6 @@ import (
 	"unitool/internal/retention"
 	"unitool/internal/storage"
 	"unitool/internal/telegram"
-	"unitool/internal/weekly"
 	"unitool/internal/workers"
 	cometprov "unitool/pkg/provider/comet"
 
@@ -105,10 +104,6 @@ func main() {
 		cfg.MediaGenTimeout,
 	)
 	genSvc.Start(ctx)
-
-	// Weekly free text generations
-	weeklySvc := weekly.NewService(pg, cfg.WeeklyCronAtUTC, cfg.WeeklyTextGenerations)
-	weeklySvc.Start(ctx)
 	var retentionSvc *retention.Service
 	if cfg.RetentionEnabled {
 		retentionSvc = retention.NewService(
@@ -319,9 +314,6 @@ func main() {
 	}
 	if err := genSvc.Wait(shutdownCtx); err != nil {
 		logg.Error().Err(err).Msg("generation service wait")
-	}
-	if err := weeklySvc.Wait(shutdownCtx); err != nil {
-		logg.Error().Err(err).Msg("weekly service wait")
 	}
 	if err := notifierSvc.Wait(shutdownCtx); err != nil {
 		logg.Error().Err(err).Msg("notifier service wait")

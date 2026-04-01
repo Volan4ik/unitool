@@ -44,6 +44,35 @@ func (q *Queries) AddPurchaseCredits(ctx context.Context, arg AddPurchaseCredits
 	return result.RowsAffected(), nil
 }
 
+const addSignupBonus = `-- name: AddSignupBonus :execrows
+INSERT INTO credit_ledger (user_id,
+  delta_image, delta_video, reason, meta, op_key)
+VALUES ($1,$2,$3,'admin_grant',$4,$5)
+ON CONFLICT (op_key) DO NOTHING
+`
+
+type AddSignupBonusParams struct {
+	UserID     int64       `json:"user_id"`
+	DeltaImage int32       `json:"delta_image"`
+	DeltaVideo int32       `json:"delta_video"`
+	Meta       []byte      `json:"meta"`
+	OpKey      pgtype.Text `json:"op_key"`
+}
+
+func (q *Queries) AddSignupBonus(ctx context.Context, arg AddSignupBonusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, addSignupBonus,
+		arg.UserID,
+		arg.DeltaImage,
+		arg.DeltaVideo,
+		arg.Meta,
+		arg.OpKey,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const refundImage = `-- name: RefundImage :exec
 INSERT INTO credit_ledger (user_id, gen_kind, delta_image, reason, meta, op_key)
 VALUES ($1,'image',1,'refund',$2,$3)

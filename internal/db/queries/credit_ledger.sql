@@ -4,6 +4,12 @@ INSERT INTO credit_ledger (user_id, order_id,
 VALUES ($1,$2,$3,$4,$5,'purchase',$6,$7)
 ON CONFLICT (op_key) DO NOTHING;
 
+-- name: AddSignupBonus :execrows
+INSERT INTO credit_ledger (user_id,
+  delta_image, delta_video, reason, meta, op_key)
+VALUES ($1,$2,$3,'admin_grant',$4,$5)
+ON CONFLICT (op_key) DO NOTHING;
+
 -- name: SpendText :exec
 INSERT INTO credit_ledger (user_id, gen_kind, delta_text, reason, meta, op_key)
 VALUES ($1,'text',-1,'spend',$2,$3)

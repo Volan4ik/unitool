@@ -80,6 +80,18 @@ func (f *recordingTGClient) textsForMethod(method string) []string {
 	return texts
 }
 
+func (f *recordingTGClient) lastFormForMethod(method string) (url.Values, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for i := len(f.requests) - 1; i >= 0; i-- {
+		if f.requests[i].method == method {
+			return f.requests[i].form, true
+		}
+	}
+	return nil, false
+}
+
 type fakeProvider struct {
 	mu           sync.Mutex
 	requests     []provider.ModelRequest
@@ -143,6 +155,9 @@ func (f *fakeProvider) lastRequest() (provider.ModelRequest, bool) {
 
 type fakeDBTX struct {
 	user                        db.User
+	userExists                  bool
+	signupBonusCalls            int
+	signupBonusGranted          bool
 	session                     db.GetUserSessionRow
 	conversationID              pgtype.UUID
 	generationRequest           db.GenerationRequest
@@ -206,6 +221,7 @@ func newFakeDBTX() *fakeDBTX {
 			CreatedAt:           now,
 			UpdatedAt:           now,
 		},
+		userExists:        true,
 		startSourceByUser: make(map[int64]string),
 	}
 }
@@ -217,6 +233,19 @@ func (f *fakeDBTX) Exec(_ context.Context, query string, args ...interface{}) (p
 		f.session = db.GetUserSessionRow{
 			Mode:  args[1].(string),
 			Model: args[2].(string),
+		}
+		return pgconn.NewCommandTag("INSERT 0 1"), nil
+	case strings.Contains(query, "name: AddSignupBonus"):
+		f.signupBonusCalls++
+		if f.signupBonusGranted {
+			return pgconn.NewCommandTag("INSERT 0 0"), nil
+		}
+		f.signupBonusGranted = true
+		if deltaImage, ok := args[1].(int32); ok {
+			f.user.ImageBalance += deltaImage
+		}
+		if deltaVideo, ok := args[2].(int32); ok {
+			f.user.VideoBalance += deltaVideo
 		}
 		return pgconn.NewCommandTag("INSERT 0 1"), nil
 	case strings.Contains(query, "name: SpendText"):
@@ -267,9 +296,15 @@ func (f *fakeDBTX) Query(_ context.Context, query string, _ ...interface{}) (pgx
 func (f *fakeDBTX) QueryRow(_ context.Context, query string, _ ...interface{}) pgx.Row {
 	switch {
 	case strings.Contains(query, "name: UpsertUserByTGID"):
+		f.userExists = true
 		return rowFromUser(f.user)
 	case strings.Contains(query, "name: GetUserByTGID"):
+		if !f.userExists {
+			return &fakeRow{err: pgx.ErrNoRows}
+		}
 		return rowFromUser(f.user)
+	case strings.Contains(query, "name: GetBalancesByUserID"):
+		return &fakeRow{values: []any{f.user.TextBalance, f.user.ImageBalance, f.user.VideoBalance}}
 	case strings.Contains(query, "name: GetUserSession"):
 		return &fakeRow{values: []any{f.session.Mode, f.session.Model}}
 	case strings.Contains(query, "name: UpsertConversation"):
@@ -531,8 +566,18 @@ func TestStartCommandTracksOrganicSourceByDefault(t *testing.T) {
 		t.Fatal("expected /start to send greeting")
 	}
 	got := texts[len(texts)-1]
-	if !strings.Contains(got, "Привет, Test!") {
+	if !strings.Contains(got, "Test, добро пожаловать!") {
 		t.Fatalf("expected personalized greeting, got %q", got)
+	}
+	if !strings.Contains(got, "мы дарим Вам тестовые 5 генераций") {
+		t.Fatalf("expected signup offer copy, got %q", got)
+	}
+	form, ok := client.lastFormForMethod("sendMessage")
+	if !ok {
+		t.Fatal("expected /start form data")
+	}
+	if got := form.Get("parse_mode"); got != "HTML" {
+		t.Fatalf("expected HTML parse mode, got %q", got)
 	}
 }
 
@@ -610,11 +655,130 @@ func TestHelpCommandSendsUsageGuide(t *testing.T) {
 	if !strings.Contains(got, "Как пользоваться ботом:") {
 		t.Fatalf("expected usage section, got: %q", got)
 	}
+	if !strings.Contains(got, "Напишите обычным сообщением, что хотите получить.") {
+		t.Fatalf("expected plain-language prompt guidance, got: %q", got)
+	}
 	if !strings.Contains(got, "input_reference=https://example.com/ref.png") {
 		t.Fatalf("expected input_reference hint, got: %q", got)
 	}
 	if !strings.Contains(got, "Видео: Sora 2, Kling, Veo 3") {
 		t.Fatalf("expected current video model list, got: %q", got)
+	}
+	if !strings.Contains(got, "Поддержка: @helpper") {
+		t.Fatalf("expected support contact, got: %q", got)
+	}
+}
+
+func TestEnsureUserGrantsSignupBonusOnce(t *testing.T) {
+	ctx := context.Background()
+	dbtx := newFakeDBTX()
+	dbtx.userExists = false
+	dbtx.user.TextBalance = 0
+	dbtx.user.ImageBalance = 0
+	dbtx.user.VideoBalance = 0
+	q := db.New(dbtx)
+
+	msg := &tgbotapi.Message{
+		From: &tgbotapi.User{
+			ID:           dbtx.user.TgID,
+			UserName:     "tester",
+			FirstName:    "Test",
+			LanguageCode: "ru",
+		},
+	}
+
+	userID, err := EnsureUser(ctx, q, msg)
+	if err != nil {
+		t.Fatalf("first EnsureUser: %v", err)
+	}
+	if userID != dbtx.user.ID {
+		t.Fatalf("expected user id %d, got %d", dbtx.user.ID, userID)
+	}
+	if dbtx.signupBonusCalls != 1 {
+		t.Fatalf("expected one signup bonus grant, got %d", dbtx.signupBonusCalls)
+	}
+	if dbtx.user.ImageBalance != signupBonusImageCredits {
+		t.Fatalf("expected %d image credits, got %d", signupBonusImageCredits, dbtx.user.ImageBalance)
+	}
+	if dbtx.user.VideoBalance != signupBonusVideoCredits {
+		t.Fatalf("expected %d video credits, got %d", signupBonusVideoCredits, dbtx.user.VideoBalance)
+	}
+
+	_, err = EnsureUser(ctx, q, msg)
+	if err != nil {
+		t.Fatalf("second EnsureUser: %v", err)
+	}
+	if dbtx.signupBonusCalls != 1 {
+		t.Fatalf("expected signup bonus to remain single-grant, got %d calls", dbtx.signupBonusCalls)
+	}
+	if dbtx.user.ImageBalance != signupBonusImageCredits {
+		t.Fatalf("expected image balance to remain %d, got %d", signupBonusImageCredits, dbtx.user.ImageBalance)
+	}
+	if dbtx.user.VideoBalance != signupBonusVideoCredits {
+		t.Fatalf("expected video balance to remain %d, got %d", signupBonusVideoCredits, dbtx.user.VideoBalance)
+	}
+}
+
+func TestProfileShowsSupportButton(t *testing.T) {
+	ctx := context.Background()
+	dbtx := newFakeDBTX()
+	q := db.New(dbtx)
+	prov := &fakeProvider{}
+	router, client := newTestRouter(t, q, prov)
+
+	err := router.handleMessage(ctx, &tgbotapi.Message{
+		Text: "Профиль",
+		From: &tgbotapi.User{ID: dbtx.user.TgID, UserName: "tester"},
+		Chat: &tgbotapi.Chat{ID: 100, Type: "private"},
+	}, dbtx.user.ID)
+	if err != nil {
+		t.Fatalf("handleMessage: %v", err)
+	}
+
+	form, ok := client.lastFormForMethod("sendMessage")
+	if !ok {
+		t.Fatal("expected profile to send a message")
+	}
+
+	if got := form.Get("text"); !strings.Contains(got, "Баланс:") {
+		t.Fatalf("expected profile balance text, got: %q", got)
+	}
+	replyMarkup := form.Get("reply_markup")
+	if !strings.Contains(replyMarkup, "Поддержка") {
+		t.Fatalf("expected support button in profile, got: %q", replyMarkup)
+	}
+	if !strings.Contains(replyMarkup, "support:help") {
+		t.Fatalf("expected support callback in profile, got: %q", replyMarkup)
+	}
+}
+
+func TestSupportCallbackSendsHelpMessage(t *testing.T) {
+	ctx := context.Background()
+	dbtx := newFakeDBTX()
+	q := db.New(dbtx)
+	prov := &fakeProvider{}
+	router, client := newTestRouter(t, q, prov)
+
+	err := router.handleCallback(ctx, &tgbotapi.CallbackQuery{
+		ID:   "callback-help",
+		Data: "support:help",
+		From: &tgbotapi.User{ID: dbtx.user.TgID, UserName: "tester"},
+		Message: &tgbotapi.Message{
+			MessageID: 7,
+			Chat:      &tgbotapi.Chat{ID: 100, Type: "private"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleCallback: %v", err)
+	}
+
+	texts := client.textsForMethod("sendMessage")
+	if len(texts) == 0 {
+		t.Fatal("expected support callback to send help message")
+	}
+	got := texts[len(texts)-1]
+	if !strings.Contains(got, "Поддержка: @helpper") {
+		t.Fatalf("expected support contact in callback help, got: %q", got)
 	}
 }
 
@@ -766,5 +930,37 @@ func TestMediaGenerationIsRejectedByLimiterBeforeChargeAndEnqueue(t *testing.T) 
 	}
 	if !foundBusy {
 		t.Fatal("expected overload message for media limiter rejection")
+	}
+}
+
+func TestMediaGenerationSendsAnalysisAck(t *testing.T) {
+	ctx := context.Background()
+	dbtx := newFakeDBTX()
+	dbtx.session = db.GetUserSessionRow{
+		Mode:  "image",
+		Model: "GPT 4o Image",
+	}
+	q := db.New(dbtx)
+	prov := &fakeProvider{}
+	router, client := newTestRouter(t, q, prov)
+
+	err := router.handleMessage(ctx, &tgbotapi.Message{
+		Text: "Нарисуй дом",
+		From: &tgbotapi.User{ID: dbtx.user.TgID},
+		Chat: &tgbotapi.Chat{ID: 100, Type: "private"},
+	}, dbtx.user.ID)
+	if err != nil {
+		t.Fatalf("handleMessage: %v", err)
+	}
+
+	foundAck := false
+	for _, text := range client.textsForMethod("sendMessage") {
+		if text == "Анализирую ваш запрос..." {
+			foundAck = true
+			break
+		}
+	}
+	if !foundAck {
+		t.Fatal("expected analysis ack for accepted media generation")
 	}
 }

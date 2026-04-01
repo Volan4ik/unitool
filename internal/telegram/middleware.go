@@ -2,10 +2,19 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "unitool/internal/db/generated"
+)
+
+const (
+	signupBonusImageCredits = 3
+	signupBonusVideoCredits = 2
 )
 
 // EnsureUser upserts the user by TG ID and returns internal user id.
@@ -19,6 +28,12 @@ func EnsureUser(ctx context.Context, q *db.Queries, m *tgbotapi.Message) (int64,
 	lastName = m.From.LastName
 	lang = m.From.LanguageCode
 
+	_, lookupErr := q.GetUserByTGID(ctx, m.From.ID)
+	isNewUser := errors.Is(lookupErr, pgx.ErrNoRows)
+	if lookupErr != nil && !isNewUser {
+		return 0, lookupErr
+	}
+
 	u, err := q.UpsertUserByTGID(ctx, db.UpsertUserByTGIDParams{
 		TgID:      m.From.ID,
 		Username:  pgtype.Text{String: username, Valid: username != ""},
@@ -29,5 +44,24 @@ func EnsureUser(ctx context.Context, q *db.Queries, m *tgbotapi.Message) (int64,
 	if err != nil {
 		return 0, err
 	}
+
+	if isNewUser {
+		meta, _ := json.Marshal(map[string]any{
+			"source":        "signup_bonus",
+			"tg_id":         m.From.ID,
+			"image_credits": signupBonusImageCredits,
+			"video_credits": signupBonusVideoCredits,
+		})
+		if _, err := q.AddSignupBonus(ctx, db.AddSignupBonusParams{
+			UserID:     u.ID,
+			DeltaImage: signupBonusImageCredits,
+			DeltaVideo: signupBonusVideoCredits,
+			Meta:       meta,
+			OpKey:      pgtype.Text{String: fmt.Sprintf("signup_bonus:%d", u.ID), Valid: true},
+		}); err != nil {
+			return 0, err
+		}
+	}
+
 	return u.ID, nil
 }

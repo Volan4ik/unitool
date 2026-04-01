@@ -19,6 +19,15 @@ func MainReplyKeyboard() tgbotapi.ReplyKeyboardMarkup {
 	return kb
 }
 
+func ProfileInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Купить пакеты", "buy:menu"),
+			tgbotapi.NewInlineKeyboardButtonData("Поддержка", "support:help"),
+		),
+	)
+}
+
 func ModelsInlineKeyboard(mode string, selected string) tgbotapi.InlineKeyboardMarkup {
 	// Mode switch row
 	tabs := tgbotapi.NewInlineKeyboardRow(
