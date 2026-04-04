@@ -194,11 +194,15 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 
 	input := job.Prompt
 	params := map[string]any{"kind": job.Kind}
-	if job.Kind == "video" {
-		cleanPrompt, inputReference := splitVideoPromptInputReference(job.Prompt)
+	if job.Kind == "video" || job.Kind == "image" {
+		cleanPrompt, inputReferences := splitPromptInputReferences(job.Prompt)
 		input = cleanPrompt
-		if inputReference != "" {
-			params["input_reference"] = inputReference
+		if len(inputReferences) > 0 {
+			params["input_reference"] = inputReferences[0]
+			params["input_references"] = inputReferences
+			if job.Kind == "image" {
+				params["input_references"] = inputReferences
+			}
 		}
 	}
 
@@ -764,22 +768,22 @@ func decodeDataImageURI(raw string) (string, []byte, error) {
 	return header, blob, nil
 }
 
-func splitVideoPromptInputReference(raw string) (string, string) {
+func splitPromptInputReferences(raw string) (string, []string) {
 	if strings.TrimSpace(raw) == "" {
-		return "", ""
+		return "", nil
 	}
 	lines := strings.Split(raw, "\n")
 	kept := make([]string, 0, len(lines))
-	inputReference := ""
+	inputReferences := make([]string, 0, 1)
 	for _, line := range lines {
-		if ref, ok := parseInputReferenceLine(line); ok && inputReference == "" {
-			inputReference = ref
+		if ref, ok := parseInputReferenceLine(line); ok {
+			inputReferences = append(inputReferences, ref)
 			continue
 		}
 		kept = append(kept, line)
 	}
 	prompt := strings.TrimSpace(strings.Join(kept, "\n"))
-	return prompt, inputReference
+	return prompt, inputReferences
 }
 
 func parseInputReferenceLine(line string) (string, bool) {

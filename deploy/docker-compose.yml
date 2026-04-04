@@ -1,7 +1,7 @@
-version: "3.9"
 services:
   db:
     image: postgres:15
+    restart: unless-stopped
     environment:
       POSTGRES_DB: bot
       POSTGRES_USER: bot
@@ -13,10 +13,12 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+    restart: unless-stopped
     env_file: ../.env
     environment:
       # Override DB connection for compose network
       - DATABASE_URL=postgres://bot:bot@db:5432/bot?sslmode=disable
+    ports: ["8080:8080"]
     depends_on: [db]
 volumes:
   pgdata: {}

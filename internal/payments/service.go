@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -18,11 +19,13 @@ import (
 )
 
 var ErrPaymentUnavailableForBanned = errors.New("payment unavailable for banned account")
+var ErrBoostRequiresBasePackage = errors.New("boost requires a paid base package")
 
 const bannedPaymentMessage = "Оплата недоступна для заблокированного аккаунта. Обратитесь к администратору."
 
 type Package struct {
 	ID           int64
+	Code         string
 	Title        string
 	PriceRub     int
 	TextCredits  int
@@ -59,9 +62,11 @@ func (s *Service) SendInvoiceForPackage(ctx context.Context, chatID int64, userI
 	dbCtx, cancel := s.withDBTimeout(ctx)
 	defer cancel()
 
-	if err := s.ensurePaymentAllowed(dbCtx, userID); err != nil {
+	if err := s.ensurePaymentAllowed(dbCtx, userID, pkg); err != nil {
 		if errors.Is(err, ErrPaymentUnavailableForBanned) {
 			log.Printf("payment: invoice blocked for banned user_id=%d package_id=%d", userID, pkg.ID)
+		} else if errors.Is(err, ErrBoostRequiresBasePackage) {
+			log.Printf("payment: invoice blocked for boost user_id=%d package_id=%d code=%s", userID, pkg.ID, pkg.Code)
 		}
 		return "", err
 	}
@@ -190,7 +195,6 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, bannedPaymentMessage))
 		return nil
 	}
-
 	beginTx := s.beginTx
 	if beginTx == nil {
 		beginTx = func(ctx context.Context) (pgx.Tx, error) {
@@ -343,6 +347,26 @@ func (s *Service) validatePreCheckout(ctx context.Context, pcq *tgbotapi.PreChec
 		s.failOrder(dbCtx, orderUUID, "banned_user_precheckout")
 		return false, bannedPaymentMessage, nil
 	}
+	pkg, err := s.Q.GetPackageByID(dbCtx, order.PackageID)
+	if err != nil {
+		log.Printf("precheckout get package failed order=%s err=%v", orderUUID.String(), err)
+		return false, "Временная ошибка подтверждения заказа", err
+	}
+	if err := s.ensurePaymentAllowed(dbCtx, order.UserID, Package{
+		ID:           pkg.ID,
+		Code:         pkg.Code,
+		Title:        pkg.Title,
+		PriceRub:     int(pkg.PriceRub),
+		TextCredits:  int(pkg.TextCredits),
+		ImageCredits: int(pkg.ImageCredits),
+		VideoCredits: int(pkg.VideoCredits),
+	}); err != nil {
+		if errors.Is(err, ErrBoostRequiresBasePackage) {
+			s.failOrder(dbCtx, orderUUID, "boost_requires_base_package_precheckout")
+			return false, boostRestrictionMessage(), nil
+		}
+		return false, "Временная ошибка подтверждения заказа", err
+	}
 
 	affected, err := s.Q.MarkOrderPrecheckout(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
 	if err != nil {
@@ -384,7 +408,7 @@ func (s *Service) withDBTimeout(parent context.Context) (context.Context, contex
 	return context.WithTimeout(parent, timeout)
 }
 
-func (s *Service) ensurePaymentAllowed(ctx context.Context, userID int64) error {
+func (s *Service) ensurePaymentAllowed(ctx context.Context, userID int64, pkg Package) error {
 	user, err := s.Q.GetUserByID(ctx, userID)
 	if err != nil {
 		return err
@@ -392,7 +416,27 @@ func (s *Service) ensurePaymentAllowed(ctx context.Context, userID int64) error 
 	if user.IsBanned {
 		return ErrPaymentUnavailableForBanned
 	}
+	if isBoostPackageCode(pkg.Code) {
+		lastPaid, err := s.Q.GetLastPaidPackageByUser(ctx, userID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrBoostRequiresBasePackage
+			}
+			return err
+		}
+		if isBoostPackageCode(lastPaid.Code) {
+			return ErrBoostRequiresBasePackage
+		}
+	}
 	return nil
+}
+
+func isBoostPackageCode(code string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(code)), "boost")
+}
+
+func boostRestrictionMessage() string {
+	return "Буст можно купить только один раз после основного тарифа. Чтобы купить буст снова, сначала оплатите один из основных тарифов."
 }
 
 type providerData struct {

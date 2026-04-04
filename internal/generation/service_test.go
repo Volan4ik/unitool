@@ -774,26 +774,34 @@ func TestProcessJobSuccessAfterGuardRunsSideEffects(t *testing.T) {
 	}
 }
 
-func TestSplitVideoPromptInputReference(t *testing.T) {
-	prompt, ref := splitVideoPromptInputReference("input_reference=https://cdn.example.com/ref.png\ncinematic shot")
-	if ref != "https://cdn.example.com/ref.png" {
-		t.Fatalf("unexpected input reference: %q", ref)
+func TestSplitPromptInputReferences(t *testing.T) {
+	prompt, refs := splitPromptInputReferences("input_reference=https://cdn.example.com/ref.png\ncinematic shot")
+	if len(refs) != 1 || refs[0] != "https://cdn.example.com/ref.png" {
+		t.Fatalf("unexpected input references: %#v", refs)
 	}
 	if prompt != "cinematic shot" {
 		t.Fatalf("unexpected prompt: %q", prompt)
 	}
 
-	prompt, ref = splitVideoPromptInputReference("cinematic shot\ninput_reference: https://cdn.example.com/ref2.png")
-	if ref != "https://cdn.example.com/ref2.png" {
-		t.Fatalf("unexpected input reference for colon syntax: %q", ref)
+	prompt, refs = splitPromptInputReferences("cinematic shot\ninput_reference: https://cdn.example.com/ref2.png")
+	if len(refs) != 1 || refs[0] != "https://cdn.example.com/ref2.png" {
+		t.Fatalf("unexpected input references for colon syntax: %#v", refs)
 	}
 	if prompt != "cinematic shot" {
 		t.Fatalf("unexpected prompt for trailing reference line: %q", prompt)
 	}
 
-	prompt, ref = splitVideoPromptInputReference("cinematic shot only")
-	if ref != "" {
-		t.Fatalf("did not expect input reference, got %q", ref)
+	prompt, refs = splitPromptInputReferences("input_reference=https://cdn.example.com/ref-a.png\ninput_reference=https://cdn.example.com/ref-b.png\ncinematic shot only")
+	if len(refs) != 2 {
+		t.Fatalf("expected two input references, got %#v", refs)
+	}
+	if prompt != "cinematic shot only" {
+		t.Fatalf("unexpected prompt with multiple references: %q", prompt)
+	}
+
+	prompt, refs = splitPromptInputReferences("cinematic shot only")
+	if len(refs) != 0 {
+		t.Fatalf("did not expect input references, got %#v", refs)
 	}
 	if prompt != "cinematic shot only" {
 		t.Fatalf("unexpected prompt without reference: %q", prompt)
@@ -832,5 +840,41 @@ func TestProcessJobVideoPassesInputReferenceParam(t *testing.T) {
 	}
 	if got, _ := req.Params["input_reference"].(string); got != "https://cdn.example.com/ref.png" {
 		t.Fatalf("expected input_reference to be passed, got %q", got)
+	}
+}
+
+func TestProcessJobImagePassesInputReferenceParams(t *testing.T) {
+	fakeTG := newFakeTelegramAPI()
+	fakeDB := &fakeGenerationDBTX{}
+	fakeProv := &fakeModelProvider{resp: provider.ModelResponse{Output: "https://cdn.example.com/out.png", Tokens: 7}}
+	svc := &Service{
+		Bot:        newTestBot(t, fakeTG),
+		Q:          db.New(fakeDB),
+		Prov:       fakeProv,
+		GenTimeout: 5 * time.Second,
+	}
+	job := db.GenerationJob{
+		ID:                  108,
+		GenerationRequestID: 208,
+		UserID:              308,
+		ChatID:              408,
+		Kind:                "image",
+		Model:               "gpt-4o-image",
+		Provider:            "comet",
+		Prompt:              "input_reference=data:image/jpeg;base64,ZmFrZQ==\nportrait lighting",
+	}
+
+	svc.processJob(context.Background(), job)
+
+	req := fakeProv.lastRequest()
+	if req.Input != "portrait lighting" {
+		t.Fatalf("expected cleaned image prompt, got %q", req.Input)
+	}
+	if got, _ := req.Params["input_reference"].(string); got != "data:image/jpeg;base64,ZmFrZQ==" {
+		t.Fatalf("expected image input_reference to be passed, got %q", got)
+	}
+	refs, ok := req.Params["input_references"].([]string)
+	if !ok || len(refs) != 1 || refs[0] != "data:image/jpeg;base64,ZmFrZQ==" {
+		t.Fatalf("expected image input_references slice, got %#v", req.Params["input_references"])
 	}
 }

@@ -92,9 +92,11 @@ func (f *paymentTGClient) sentTexts() []string {
 type paymentStore struct {
 	mu sync.Mutex
 
-	user  db.User
-	order db.GetOrderByIDRow
-	pkg   db.Package
+	user           db.User
+	order          db.GetOrderByIDRow
+	pkg            db.Package
+	lastPaid       db.GetLastPaidPackageByUserRow
+	lastPaidExists bool
 
 	createOrderCalls      int
 	markOrderPaidCalls    int
@@ -135,7 +137,7 @@ func newPaymentStore() *paymentStore {
 		},
 		pkg: db.Package{
 			ID:           20,
-			Code:         "starter",
+			Code:         "base_minimum",
 			Title:        "Starter",
 			PriceRub:     199,
 			Currency:     "RUB",
@@ -190,6 +192,17 @@ func (dbx *paymentDB) QueryRow(_ context.Context, query string, args ...interfac
 	switch {
 	case strings.Contains(query, "name: GetUserByID"):
 		return paymentRowFromUser(dbx.store.user)
+	case strings.Contains(query, "name: GetLastPaidPackageByUser"):
+		if !dbx.store.lastPaidExists {
+			return &paymentFakeRow{err: pgx.ErrNoRows}
+		}
+		return &paymentFakeRow{values: []any{
+			dbx.store.lastPaid.Code,
+			dbx.store.lastPaid.Title,
+			dbx.store.lastPaid.PriceRub,
+			dbx.store.lastPaid.Currency,
+			dbx.store.lastPaid.PaidAt,
+		}}
 	case strings.Contains(query, "name: GetOrderByID"):
 		return paymentRowFromOrder(dbx.store.order)
 	case strings.Contains(query, "name: CreateOrder"):
@@ -434,6 +447,7 @@ func TestSendInvoiceForPackageRejectsBannedUser(t *testing.T) {
 
 	_, err := svc.SendInvoiceForPackage(context.Background(), 100, store.user.ID, Package{
 		ID:       store.pkg.ID,
+		Code:     store.pkg.Code,
 		Title:    store.pkg.Title,
 		PriceRub: int(store.pkg.PriceRub),
 	}, "")
@@ -454,6 +468,7 @@ func TestHandleSuccessfulPaymentBannedUserMovesOrderToManualReview(t *testing.T)
 
 	if _, err := svc.SendInvoiceForPackage(context.Background(), 100, store.user.ID, Package{
 		ID:       store.pkg.ID,
+		Code:     store.pkg.Code,
 		Title:    store.pkg.Title,
 		PriceRub: int(store.pkg.PriceRub),
 	}, ""); err != nil {
@@ -544,5 +559,34 @@ func TestHandleSuccessfulPaymentDuplicateDoesNotDoubleCredit(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected duplicate payment confirmation message")
+	}
+}
+
+func TestSendInvoiceForBoostRequiresPreviouslyPaidBasePackage(t *testing.T) {
+	store := newPaymentStore()
+	store.lastPaidExists = true
+	store.lastPaid = db.GetLastPaidPackageByUserRow{
+		Code:     "boost_10_2",
+		Title:    "Буст",
+		PriceRub: 290,
+		Currency: "RUB",
+		PaidAt:   pgtype.Timestamptz{Valid: true},
+	}
+	svc, client := newTestPaymentService(t, store)
+
+	_, err := svc.SendInvoiceForPackage(context.Background(), 100, store.user.ID, Package{
+		ID:       99,
+		Code:     "boost_10_2",
+		Title:    "Буст",
+		PriceRub: 290,
+	}, "")
+	if !errors.Is(err, ErrBoostRequiresBasePackage) {
+		t.Fatalf("expected boost restriction error, got %v", err)
+	}
+	if store.createOrderCalls != 0 {
+		t.Fatalf("expected no boost order to be created, got %d", store.createOrderCalls)
+	}
+	if got := client.countMethod("sendInvoice"); got != 0 {
+		t.Fatalf("expected no invoice to be sent, got %d", got)
 	}
 }

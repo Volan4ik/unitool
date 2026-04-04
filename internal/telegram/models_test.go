@@ -11,9 +11,9 @@ func TestResolveModelByMode(t *testing.T) {
 		t.Fatal("expected text model to resolve")
 	}
 
-	id, ok = ResolveModel("image", "DALL-E 3")
-	if !ok || id == "" {
-		t.Fatal("expected image model to resolve")
+	id, ok = ResolveModel("image", "Kling")
+	if !ok || id != "kling-v2" {
+		t.Fatalf("expected image Kling to resolve to kling-v2, got id=%q ok=%v", id, ok)
 	}
 
 	id, ok = ResolveModel("video", "Sora 2")
@@ -27,8 +27,8 @@ func TestResolveModelByMode(t *testing.T) {
 	}
 
 	id, ok = ResolveModel("video", "Kling")
-	if !ok || id != "kling" {
-		t.Fatalf("expected Kling to resolve to kling, got id=%q ok=%v", id, ok)
+	if !ok || id != "kling-v1-6" {
+		t.Fatalf("expected Kling to resolve to kling-v1-6, got id=%q ok=%v", id, ok)
 	}
 }
 
@@ -43,7 +43,7 @@ func TestModelUIListStableOrder(t *testing.T) {
 		},
 		{
 			mode: "image",
-			want: []string{"GPT 4o Image", "Gemini 2.5 (Nano Banana)", "DALL-E 3", "Midjourney"},
+			want: []string{"GPT 4o Image", "Gemini 2.5 (Nano Banana)", "Kling"},
 		},
 		{
 			mode: "video",

@@ -55,7 +55,45 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE IF EXISTS users
+  ADD COLUMN IF NOT EXISTS username citext,
+  ADD COLUMN IF NOT EXISTS first_name text,
+  ADD COLUMN IF NOT EXISTS last_name text,
+  ADD COLUMN IF NOT EXISTS lang_code text,
+  ADD COLUMN IF NOT EXISTS is_banned boolean DEFAULT false,
+  ADD COLUMN IF NOT EXISTS banned_at timestamptz,
+  ADD COLUMN IF NOT EXISTS banned_reason text,
+  ADD COLUMN IF NOT EXISTS text_balance integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS image_balance integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS video_balance integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+
+UPDATE users
+SET
+  is_banned = COALESCE(is_banned, false),
+  text_balance = COALESCE(text_balance, 0),
+  image_balance = COALESCE(image_balance, 0),
+  video_balance = COALESCE(video_balance, 0),
+  created_at = COALESCE(created_at, now()),
+  updated_at = COALESCE(updated_at, now());
+
+ALTER TABLE IF EXISTS users
+  ALTER COLUMN is_banned SET DEFAULT false,
+  ALTER COLUMN is_banned SET NOT NULL,
+  ALTER COLUMN text_balance SET DEFAULT 0,
+  ALTER COLUMN text_balance SET NOT NULL,
+  ALTER COLUMN image_balance SET DEFAULT 0,
+  ALTER COLUMN image_balance SET NOT NULL,
+  ALTER COLUMN video_balance SET DEFAULT 0,
+  ALTER COLUMN video_balance SET NOT NULL,
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN created_at SET NOT NULL,
+  ALTER COLUMN updated_at SET DEFAULT now(),
+  ALTER COLUMN updated_at SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_users_is_banned ON users(is_banned);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_tg_id ON users(tg_id);
 
 DROP TRIGGER IF EXISTS trg_users_set_updated ON users;
 CREATE TRIGGER trg_users_set_updated
@@ -76,6 +114,48 @@ CREATE TABLE IF NOT EXISTS packages (
   updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE IF EXISTS packages
+  ADD COLUMN IF NOT EXISTS title text,
+  ADD COLUMN IF NOT EXISTS price_rub integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS currency text DEFAULT 'RUB',
+  ADD COLUMN IF NOT EXISTS text_credits integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS image_credits integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS video_credits integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS is_active boolean DEFAULT true,
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+
+UPDATE packages
+SET
+  currency = COALESCE(NULLIF(currency, ''), 'RUB'),
+  price_rub = COALESCE(price_rub, 0),
+  text_credits = COALESCE(text_credits, 0),
+  image_credits = COALESCE(image_credits, 0),
+  video_credits = COALESCE(video_credits, 0),
+  is_active = COALESCE(is_active, true),
+  created_at = COALESCE(created_at, now()),
+  updated_at = COALESCE(updated_at, now());
+
+ALTER TABLE IF EXISTS packages
+  ALTER COLUMN price_rub SET DEFAULT 0,
+  ALTER COLUMN price_rub SET NOT NULL,
+  ALTER COLUMN currency SET DEFAULT 'RUB',
+  ALTER COLUMN currency SET NOT NULL,
+  ALTER COLUMN text_credits SET DEFAULT 0,
+  ALTER COLUMN text_credits SET NOT NULL,
+  ALTER COLUMN image_credits SET DEFAULT 0,
+  ALTER COLUMN image_credits SET NOT NULL,
+  ALTER COLUMN video_credits SET DEFAULT 0,
+  ALTER COLUMN video_credits SET NOT NULL,
+  ALTER COLUMN is_active SET DEFAULT true,
+  ALTER COLUMN is_active SET NOT NULL,
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN created_at SET NOT NULL,
+  ALTER COLUMN updated_at SET DEFAULT now(),
+  ALTER COLUMN updated_at SET NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_packages_code ON packages(code);
+
 DROP TRIGGER IF EXISTS trg_packages_set_updated ON packages;
 CREATE TRIGGER trg_packages_set_updated
 BEFORE UPDATE ON packages
@@ -95,6 +175,26 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at                  timestamptz NOT NULL DEFAULT now(),
   paid_at                     timestamptz
 );
+
+ALTER TABLE IF EXISTS orders
+  ADD COLUMN IF NOT EXISTS currency text DEFAULT 'RUB',
+  ADD COLUMN IF NOT EXISTS tg_payment_charge_id text,
+  ADD COLUMN IF NOT EXISTS provider_payment_charge_id text,
+  ADD COLUMN IF NOT EXISTS buyer_email citext,
+  ADD COLUMN IF NOT EXISTS provider_data jsonb,
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS paid_at timestamptz;
+
+UPDATE orders
+SET
+  currency = COALESCE(NULLIF(currency, ''), 'RUB'),
+  created_at = COALESCE(created_at, now());
+
+ALTER TABLE IF EXISTS orders
+  ALTER COLUMN currency SET DEFAULT 'RUB',
+  ALTER COLUMN currency SET NOT NULL,
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN created_at SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_orders_tg_payment_charge
@@ -117,6 +217,35 @@ CREATE TABLE IF NOT EXISTS telegram_updates (
     CHECK (status IN ('processing', 'done', 'failed'))
 );
 
+ALTER TABLE IF EXISTS telegram_updates
+  ADD COLUMN IF NOT EXISTS status text DEFAULT 'processing',
+  ADD COLUMN IF NOT EXISTS attempt_count integer DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS processing_started_at timestamptz DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS done_at timestamptz,
+  ADD COLUMN IF NOT EXISTS last_error text,
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+
+UPDATE telegram_updates
+SET
+  status = COALESCE(NULLIF(status, ''), 'processing'),
+  attempt_count = COALESCE(attempt_count, 1),
+  processing_started_at = COALESCE(processing_started_at, now()),
+  created_at = COALESCE(created_at, now()),
+  updated_at = COALESCE(updated_at, now());
+
+ALTER TABLE IF EXISTS telegram_updates
+  ALTER COLUMN status SET DEFAULT 'processing',
+  ALTER COLUMN status SET NOT NULL,
+  ALTER COLUMN attempt_count SET DEFAULT 1,
+  ALTER COLUMN attempt_count SET NOT NULL,
+  ALTER COLUMN processing_started_at SET DEFAULT now(),
+  ALTER COLUMN processing_started_at SET NOT NULL,
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN created_at SET NOT NULL,
+  ALTER COLUMN updated_at SET DEFAULT now(),
+  ALTER COLUMN updated_at SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_telegram_updates_created_at ON telegram_updates(created_at);
 CREATE INDEX IF NOT EXISTS idx_telegram_updates_status_processing
   ON telegram_updates(status, processing_started_at);
@@ -136,6 +265,34 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
   CONSTRAINT credit_ledger_nonzero_delta
     CHECK (delta_text <> 0 OR delta_image <> 0 OR delta_video <> 0)
 );
+
+ALTER TABLE IF EXISTS credit_ledger
+  ADD COLUMN IF NOT EXISTS order_id uuid,
+  ADD COLUMN IF NOT EXISTS gen_kind gen_type,
+  ADD COLUMN IF NOT EXISTS delta_text integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS delta_image integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS delta_video integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS reason ledger_reason,
+  ADD COLUMN IF NOT EXISTS meta jsonb,
+  ADD COLUMN IF NOT EXISTS op_key text,
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+
+UPDATE credit_ledger
+SET
+  delta_text = COALESCE(delta_text, 0),
+  delta_image = COALESCE(delta_image, 0),
+  delta_video = COALESCE(delta_video, 0),
+  created_at = COALESCE(created_at, now());
+
+ALTER TABLE IF EXISTS credit_ledger
+  ALTER COLUMN delta_text SET DEFAULT 0,
+  ALTER COLUMN delta_text SET NOT NULL,
+  ALTER COLUMN delta_image SET DEFAULT 0,
+  ALTER COLUMN delta_image SET NOT NULL,
+  ALTER COLUMN delta_video SET DEFAULT 0,
+  ALTER COLUMN delta_video SET NOT NULL,
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN created_at SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_ledger_user ON credit_ledger(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_credit_ledger_created_at ON credit_ledger(created_at);
@@ -204,6 +361,36 @@ CREATE TABLE IF NOT EXISTS generation_requests (
   finished_at         timestamptz
 );
 
+ALTER TABLE IF EXISTS generation_requests
+  ADD COLUMN IF NOT EXISTS update_id BIGINT,
+  ADD COLUMN IF NOT EXISTS provider text,
+  ADD COLUMN IF NOT EXISTS model text,
+  ADD COLUMN IF NOT EXISTS output_tokens integer,
+  ADD COLUMN IF NOT EXISTS cost_credits_text integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS cost_credits_image integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS cost_credits_video integer DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS error_message text,
+  ADD COLUMN IF NOT EXISTS latency_ms integer,
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS finished_at timestamptz;
+
+UPDATE generation_requests
+SET
+  cost_credits_text = COALESCE(cost_credits_text, 0),
+  cost_credits_image = COALESCE(cost_credits_image, 0),
+  cost_credits_video = COALESCE(cost_credits_video, 0),
+  created_at = COALESCE(created_at, now());
+
+ALTER TABLE IF EXISTS generation_requests
+  ALTER COLUMN cost_credits_text SET DEFAULT 0,
+  ALTER COLUMN cost_credits_text SET NOT NULL,
+  ALTER COLUMN cost_credits_image SET DEFAULT 0,
+  ALTER COLUMN cost_credits_image SET NOT NULL,
+  ALTER COLUMN cost_credits_video SET DEFAULT 0,
+  ALTER COLUMN cost_credits_video SET NOT NULL,
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN created_at SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_gen_user_time ON generation_requests(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_gen_kind ON generation_requests(kind, created_at);
 CREATE INDEX IF NOT EXISTS idx_gen_provider_model ON generation_requests(provider, model);
@@ -228,6 +415,22 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   created_at             timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE IF EXISTS chat_messages
+  ADD COLUMN IF NOT EXISTS attachment_url text,
+  ADD COLUMN IF NOT EXISTS provider text,
+  ADD COLUMN IF NOT EXISTS model text,
+  ADD COLUMN IF NOT EXISTS input_tokens integer,
+  ADD COLUMN IF NOT EXISTS output_tokens integer,
+  ADD COLUMN IF NOT EXISTS generation_request_id BIGINT,
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
+
+UPDATE chat_messages
+SET created_at = COALESCE(created_at, now());
+
+ALTER TABLE IF EXISTS chat_messages
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN created_at SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_chat_messages_u_c_k
   ON chat_messages(user_id, conversation_id, kind, id DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at);
@@ -239,6 +442,21 @@ CREATE TABLE IF NOT EXISTS user_sessions (
   created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE IF EXISTS user_sessions
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+
+UPDATE user_sessions
+SET
+  created_at = COALESCE(created_at, now()),
+  updated_at = COALESCE(updated_at, now());
+
+ALTER TABLE IF EXISTS user_sessions
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN created_at SET NOT NULL,
+  ALTER COLUMN updated_at SET DEFAULT now(),
+  ALTER COLUMN updated_at SET NOT NULL;
 
 DROP TRIGGER IF EXISTS trg_user_sessions_set_updated ON user_sessions;
 CREATE TRIGGER trg_user_sessions_set_updated
@@ -253,6 +471,21 @@ CREATE TABLE IF NOT EXISTS user_conversations (
   updated_at       timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, kind)
 );
+
+ALTER TABLE IF EXISTS user_conversations
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
+  ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+
+UPDATE user_conversations
+SET
+  created_at = COALESCE(created_at, now()),
+  updated_at = COALESCE(updated_at, now());
+
+ALTER TABLE IF EXISTS user_conversations
+  ALTER COLUMN created_at SET DEFAULT now(),
+  ALTER COLUMN created_at SET NOT NULL,
+  ALTER COLUMN updated_at SET DEFAULT now(),
+  ALTER COLUMN updated_at SET NOT NULL;
 
 DROP TRIGGER IF EXISTS trg_user_conversations_set_updated ON user_conversations;
 CREATE TRIGGER trg_user_conversations_set_updated

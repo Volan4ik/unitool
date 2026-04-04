@@ -22,18 +22,55 @@ func MainReplyKeyboard() tgbotapi.ReplyKeyboardMarkup {
 func ProfileInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Купить пакеты", "buy:menu"),
-			tgbotapi.NewInlineKeyboardButtonData("Поддержка", "support:help"),
+			tgbotapi.NewInlineKeyboardButtonData("Пополнить баланс", "buy:menu"),
+			tgbotapi.NewInlineKeyboardButtonURL("Написать в поддержку", "https://t.me/script_train_support"),
+		),
+	)
+}
+
+func InsufficientBalanceInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Пополнить баланс", "buy:menu"),
+			tgbotapi.NewInlineKeyboardButtonData("Мой профиль", "profile:show"),
+		),
+	)
+}
+
+func HelpInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL("Написать в поддержку", "https://t.me/script_train_support"),
+		),
+	)
+}
+
+func WelcomeInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Потратить бесплатные генерации", "start:mode"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Сразу хочу платный тариф", "buy:menu"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Расскажите про функционал", "support:help"),
+		),
+	)
+}
+
+func ModeInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Фото", "mode:image"),
+			tgbotapi.NewInlineKeyboardButtonData("Видео", "mode:video"),
 		),
 	)
 }
 
 func ModelsInlineKeyboard(mode string, selected string) tgbotapi.InlineKeyboardMarkup {
 	// Mode switch row
-	tabs := tgbotapi.NewInlineKeyboardRow(
-		tgbotapi.NewInlineKeyboardButtonData("Фото", "mode:image"),
-		tgbotapi.NewInlineKeyboardButtonData("Видео", "mode:video"),
-	)
+	tabs := ModeInlineKeyboard().InlineKeyboard[0]
 
 	// Model rows
 	models := ModelUIList(mode)

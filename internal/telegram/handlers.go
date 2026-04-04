@@ -42,6 +42,12 @@ type Router struct {
 
 	adminFlowMu sync.Mutex
 	adminFlow   map[int64]adminFlowState
+
+	pendingRefsMu sync.Mutex
+	pendingRefs   map[int64][]string
+
+	mediaGroupMu sync.Mutex
+	mediaGroups  map[string]*pendingMediaGroup
 }
 
 type UserState struct {
@@ -63,6 +69,7 @@ const (
 	defaultSourceTag   = "organic"
 	maxSourceTagLen    = 64
 	supportContact     = "@helpper"
+	channelURL         = "https://example.com"
 )
 
 var errEmptyModelResponse = errors.New("empty model response")
@@ -95,6 +102,8 @@ func NewRouter(
 		EditMaxPerMin: editMaxPerMin,
 		adminIDs:      idMap,
 		adminFlow:     make(map[int64]adminFlowState),
+		pendingRefs:   make(map[int64][]string),
+		mediaGroups:   make(map[string]*pendingMediaGroup),
 	}
 }
 
@@ -149,7 +158,7 @@ func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID 
 		greet := tgbotapi.NewMessage(m.Chat.ID, startGreetingText(m))
 		greet.ParseMode = tgbotapi.ModeHTML
 		greet.DisableWebPagePreview = true
-		greet.ReplyMarkup = MainReplyKeyboard()
+		greet.ReplyMarkup = WelcomeInlineKeyboard()
 		if _, err := r.Bot.API.Send(greet); err != nil {
 			return err
 		}
@@ -182,7 +191,7 @@ func startGreetingText(m *tgbotapi.Message) string {
 		"%s\n\n"+
 			"Мы сделали этого бота чтобы любой пользователь интернета мог получить доступ к современным моделям для генерации фото и видео БЕЗ впн'а, сложных регистраций, поисков иностранных карт и траты кучи денег на подписки.\n\n"+
 			"Что он умеет?\n"+
-			"- Генерация изображений любой сложности с помощью Nano Banana / Chat GPT / Midjourney\n"+
+			"- Генерация изображений любой сложности с помощью Nano Banana / Chat GPT / Kling\n"+
 			"- Cоздание анимаций и видео с помощью Veo3 / Sora / Kling\n\n"+
 			"Продолжая использование Вы принимаете пользовательское <a href=\"https://example.com\">соглашение</a>.\n\n"+
 			"Так как Вы пришли от наших друзей, мы дарим Вам тестовые 5 генераций. Приступим?",
@@ -191,33 +200,15 @@ func startGreetingText(m *tgbotapi.Message) string {
 }
 
 func buildHelpText() string {
-	imageModels := strings.Join(ModelUIList("image"), ", ")
-	videoModels := strings.Join(ModelUIList("video"), ", ")
-
-	return fmt.Sprintf(
-		"Как пользоваться ботом:\n\n"+
-			"1. Нажмите «Фото» или «Видео».\n"+
-			"2. Выберите подходящую модель.\n"+
-			"3. Напишите обычным сообщением, что хотите получить.\n\n"+
-			"Если делаете видео по картинке, отправьте так:\n"+
-			"input_reference=https://example.com/ref.png\n"+
-			"и на следующей строке опишите, что должно получиться.\n\n"+
-			"Доступные модели:\n"+
-			"Фото: %s\n"+
-			"Видео: %s\n\n"+
-			"Где что находится:\n"+
-			"«Профиль» — ваш баланс и поддержка.\n"+
-			"«Купить» — пакеты генераций.\n\n"+
-			"Поддержка: %s",
-		imageModels,
-		videoModels,
-		supportContact,
-	)
+	return "Главная задача нашего бота - генерация фото и видео контента  с помощью нейросетей по промту (описание) пользователя.  У нас под капотом три новейшие модели для генерации фото - Nano Banana, MidJourney и Chat GPT. И Veo3, Sora и Kling - для видео. Перед генерацией ты выбираешь модель, задаешь ей промт и получаешь результат.\n\n" +
+		"Подробнее про отличия моделей ты можешь узнать в нашем канале - <a href=\"" + channelURL + "\">название</a>. Там кстати есть еще библиотека промтов для ИИ фотосессий, и не только)"
 }
 
 func (r *Router) sendHelpMessage(chatID int64) error {
 	help := tgbotapi.NewMessage(chatID, buildHelpText())
-	help.ReplyMarkup = MainReplyKeyboard()
+	help.ParseMode = tgbotapi.ModeHTML
+	help.DisableWebPagePreview = true
+	help.ReplyMarkup = HelpInlineKeyboard()
 	if _, err := r.Bot.API.Send(help); err != nil {
 		return err
 	}
@@ -275,6 +266,9 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 			return nil
 		}
 	}
+	if len(m.Photo) > 0 {
+		return r.handlePhotoMessage(ctx, m, userID)
+	}
 	switch txt {
 	case "Фото", "Создать картинку":
 		return r.selectMode(ctx, m.Chat.ID, userID, "image")
@@ -315,6 +309,14 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 	}
 
 	if kind == "image" || kind == "video" {
+		if refs, ok := r.peekPendingReferences(userID); ok && len(refs) > 0 {
+			r.clearPendingReferences(userID)
+			if err := r.processReferencePrompt(ctx, m.Chat.ID, userID, txt, refs); err != nil {
+				r.appendPendingReferences(userID, refs)
+				return err
+			}
+			return nil
+		}
 		return r.handleAsyncMediaPrompt(ctx, m, userID, kind, modelID, txt)
 	}
 	return r.handleSyncPrompt(ctx, m, userID, modelID, txt)
@@ -406,7 +408,7 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 	chargeMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "sync_generation"})
 	if err := r.chargeOneCredit(ctx, userID, kind, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, kind)); err != nil {
 		r.failGenerationRequestWithLog(ctx, "sync-generation", gr.ID, "failed_balance", err.Error(), pgtype.Int4{})
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Недостаточно генераций для %s", kindToRus(kind))))
+		r.sendInsufficientCreditsMessage(m.Chat.ID, kind)
 		return nil
 	}
 
@@ -558,14 +560,22 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 }
 
 func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message, userID int64, kind, modelID, txt string) error {
+	return r.enqueueAsyncMediaPrompt(ctx, m.Chat.ID, userID, kind, modelID, txt)
+}
+
+func (r *Router) enqueueAsyncMediaPrompt(ctx context.Context, chatID, userID int64, kind, modelID, txt string) error {
 	providerName := "comet"
-	if !r.allowGenerationRequest(m.Chat.ID, kind) {
+	if !r.allowGenerationRequest(chatID, kind) {
 		return nil
 	}
+	cleanPrompt := promptWithoutReferenceLines(txt)
+	if strings.TrimSpace(cleanPrompt) == "" {
+		cleanPrompt = strings.TrimSpace(txt)
+	}
 	if r.Moderation != nil {
-		mr, err := r.Moderation.CheckPrompt(ctx, txt)
+		mr, err := r.Moderation.CheckPrompt(ctx, cleanPrompt)
 		if err != nil {
-			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось проверить промпт модерацией. Попробуйте позже."))
+			r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Не удалось проверить промпт модерацией. Попробуйте позже."))
 			return err
 		}
 		if !mr.Allowed {
@@ -573,14 +583,14 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 			if len(mr.Reasons) > 0 {
 				msg = fmt.Sprintf("Промпт отклонен модерацией (%s). Измените описание и попробуйте снова.", strings.Join(mr.Reasons, ", "))
 			}
-			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, msg))
+			r.Bot.API.Send(tgbotapi.NewMessage(chatID, msg))
 			return nil
 		}
 	}
 
 	convID, err := r.ensureConvID(ctx, userID, kind)
 	if err != nil {
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось открыть контекст диалога. Попробуйте снова."))
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Не удалось открыть контекст диалога. Попробуйте снова."))
 		return err
 	}
 
@@ -594,11 +604,11 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 		Column6:  "queued",
 	}, updateID)
 	if err != nil {
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Внутренняя ошибка. Попробуйте позже."))
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Внутренняя ошибка. Попробуйте позже."))
 		return err
 	}
 	if !created && isTerminalGenerationRequestStatus(generationRequestStatus(gr.Status)) {
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Этот запрос уже обработан. Отправьте новый промпт."))
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Этот запрос уже обработан. Отправьте новый промпт."))
 		return nil
 	}
 
@@ -608,7 +618,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 			ConversationID:      pgtype.UUID{Bytes: convID, Valid: true},
 			Kind:                kind,
 			Role:                "user",
-			ContentText:         pgtype.Text{String: txt, Valid: true},
+			ContentText:         pgtype.Text{String: cleanPrompt, Valid: cleanPrompt != ""},
 			AttachmentUrl:       pgtype.Text{},
 			Provider:            pgtype.Text{String: providerName, Valid: true},
 			Model:               pgtype.Text{String: modelID, Valid: true},
@@ -617,7 +627,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 			GenerationRequestID: pgtype.Int8{Int64: gr.ID, Valid: true},
 		}); err != nil {
 			r.failGenerationRequestWithLog(ctx, "async-generation", gr.ID, "failed", "insert user message failed", pgtype.Int4{})
-			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Не удалось сохранить промпт. Попробуйте позже."))
+			r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Не удалось сохранить промпт. Попробуйте позже."))
 			return nil
 		}
 	}
@@ -625,14 +635,14 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 	chargeMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "async_generation"})
 	if err := r.chargeOneCredit(ctx, userID, kind, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, kind)); err != nil {
 		r.failGenerationRequestWithLog(ctx, "async-generation", gr.ID, "failed_balance", err.Error(), pgtype.Int4{})
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Недостаточно генераций для %s", kindToRus(kind))))
+		r.sendInsufficientCreditsMessage(chatID, kind)
 		return nil
 	}
 
 	_, err = r.Q.EnqueueGenerationJob(ctx, db.EnqueueGenerationJobParams{
 		GenerationRequestID: gr.ID,
 		UserID:              userID,
-		ChatID:              m.Chat.ID,
+		ChatID:              chatID,
 		ConversationID:      pgtype.UUID{Bytes: convID, Valid: true},
 		Kind:                kind,
 		Provider:            providerName,
@@ -649,7 +659,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 			log.Printf("async-generation: refund failed gen_id=%d user_id=%d kind=%s source=queue_failed err=%v reconcile_required=true", gr.ID, userID, kind, refundErr)
 			msg = "Не удалось поставить задачу в очередь. Возврат попытки в обработке, попробуйте позже."
 		}
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, msg))
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, msg))
 		return nil
 	}
 
@@ -657,7 +667,7 @@ func (r *Router) handleAsyncMediaPrompt(ctx context.Context, m *tgbotapi.Message
 	if !created {
 		ack = "Запрос уже был принят ранее. Продолжаю обработку, результат пришлю сюда."
 	}
-	r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, ack))
+	r.Bot.API.Send(tgbotapi.NewMessage(chatID, ack))
 	return nil
 }
 
@@ -737,7 +747,15 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 			return err
 		}
 		if ok && st.Mode == mode {
-			selected = st.Model
+			if isModeChooserMessage(cq.Message) {
+				kb := ModelsInlineKeyboard(mode, st.Model)
+				edit := tgbotapi.NewEditMessageReplyMarkup(chatID, cq.Message.MessageID, kb)
+				if _, err := r.Bot.API.Request(edit); err != nil {
+					return err
+				}
+				return r.answerCallback(cq.ID, "Этот тип уже выбран. Сейчас покажу доступные модели.")
+			}
+			return r.answerCallback(cq.ID, "Этот тип уже выбран. При желании можно просто выбрать другую модель.")
 		}
 		kb := ModelsInlineKeyboard(mode, selected)
 		edit := tgbotapi.NewEditMessageReplyMarkup(chatID, cq.Message.MessageID, kb)
@@ -788,10 +806,14 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 			r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Пакет не найден: %s", code)))
 			return err
 		}
-		p := payments.Package{ID: pkg.ID, Title: pkg.Title, PriceRub: int(pkg.PriceRub)}
+		p := payments.Package{ID: pkg.ID, Code: pkg.Code, Title: pkg.Title, PriceRub: int(pkg.PriceRub)}
 		if _, err := r.Pay.SendInvoiceForPackage(ctx, chatID, u.ID, p, ""); err != nil {
 			if errors.Is(err, payments.ErrPaymentUnavailableForBanned) {
 				r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Оплата недоступна для заблокированного аккаунта. Обратитесь к администратору."))
+				return nil
+			}
+			if errors.Is(err, payments.ErrBoostRequiresBasePackage) {
+				r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Буст можно купить только один раз после основного тарифа. Чтобы купить буст снова, сначала оплатите один из основных тарифов."))
 				return nil
 			}
 			r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка оплаты: %v", err)))
@@ -806,9 +828,55 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 				return err
 			}
 		}
+	case "start":
+		if len(parts) < 2 {
+			return nil
+		}
+		if parts[1] == "mode" {
+			msg := tgbotapi.NewMessage(chatID, "Выберите тип генерации:")
+			msg.ReplyMarkup = ModeInlineKeyboard()
+			if _, err := r.Bot.API.Send(msg); err != nil {
+				return err
+			}
+		}
+	case "profile":
+		if len(parts) < 2 {
+			return nil
+		}
+		if parts[1] == "show" {
+			if err := r.showProfile(ctx, chatID, u.ID); err != nil {
+				return err
+			}
+		}
 	}
 	r.Bot.API.Request(tgbotapi.NewCallback(cq.ID, ""))
 	return nil
+}
+
+func (r *Router) answerCallback(callbackID string, text string) error {
+	cb := tgbotapi.NewCallback(callbackID, text)
+	_, err := r.Bot.API.Request(cb)
+	return err
+}
+
+func isModeChooserMessage(msg *tgbotapi.Message) bool {
+	if msg == nil || msg.ReplyMarkup == nil {
+		return false
+	}
+	rows := msg.ReplyMarkup.InlineKeyboard
+	if len(rows) != 1 || len(rows[0]) != 2 {
+		return false
+	}
+	seen := map[string]struct{}{}
+	for _, button := range rows[0] {
+		if button.CallbackData == nil {
+			return false
+		}
+		seen[*button.CallbackData] = struct{}{}
+	}
+	_, hasImage := seen["mode:image"]
+	_, hasVideo := seen["mode:video"]
+	return hasImage && hasVideo
 }
 
 func (r *Router) sendModelsMenu(chatID int64, mode, selected string) error {
@@ -827,14 +895,39 @@ func (r *Router) showProfile(ctx context.Context, chatID, userID int64) error {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка профиля: %v", err)))
 		return err
 	}
+	planName := "Пробный доступ"
+	if paid, err := r.Q.GetLastPaidPackageByUser(ctx, userID); err == nil {
+		planName = paid.Title
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка профиля: %v", err)))
+		return err
+	}
 
-	text := fmt.Sprintf("Баланс:\n• Фото: %d\n• Видео: %d", bal.ImageBalance, bal.VideoBalance)
+	text := fmt.Sprintf(
+		"<b>Профиль</b>\n\n"+
+			"Мой тарифный план: %s\n\n"+
+			"Осталось генераций фото: %d\n"+
+			"Осталось генераций видео: %d\n\n"+
+			"Ссылка на наш канал: %s",
+		html.EscapeString(planName),
+		bal.ImageBalance,
+		bal.VideoBalance,
+		channelURL,
+	)
 	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = tgbotapi.ModeHTML
+	msg.DisableWebPagePreview = true
 	msg.ReplyMarkup = ProfileInlineKeyboard()
 	if _, err := r.Bot.API.Send(msg); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (r *Router) sendInsufficientCreditsMessage(chatID int64, kind string) {
+	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Недостаточно генераций для %s", kindToRus(kind)))
+	msg.ReplyMarkup = InsufficientBalanceInlineKeyboard()
+	_, _ = r.Bot.API.Send(msg)
 }
 
 func (r *Router) showPackages(ctx context.Context, chatID int64) error {
@@ -848,28 +941,16 @@ func (r *Router) showPackages(ctx context.Context, chatID int64) error {
 		return nil
 	}
 
-	photoLines := make([]string, 0, len(pkgs))
-	videoLines := make([]string, 0, len(pkgs))
-	comboLines := make([]string, 0, len(pkgs))
-	buttons := make([]PackageButton, 0, len(pkgs))
-	for _, p := range pkgs {
-		switch {
-		case p.ImageCredits > 0 && p.VideoCredits == 0:
-			photoLines = append(photoLines, formatPackageOfferLine(p))
-		case p.VideoCredits > 0 && p.ImageCredits == 0:
-			videoLines = append(videoLines, formatPackageOfferLine(p))
-		case p.ImageCredits > 0 && p.VideoCredits > 0:
-			comboLines = append(comboLines, formatPackageOfferLine(p))
-		default:
-			comboLines = append(comboLines, formatPackageOfferLine(p))
-		}
+	ordered := orderPublicPackages(pkgs)
+	buttons := make([]PackageButton, 0, len(ordered))
+	for _, p := range ordered {
 		buttons = append(buttons, PackageButton{
 			Code:  p.Code,
 			Label: packageButtonLabel(p),
 		})
 	}
 
-	text := buildPackagesMenuText(photoLines, videoLines, comboLines)
+	text := buildPackagesMenuText()
 	kb := PackagesInlineKeyboard(buttons)
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ReplyMarkup = kb
@@ -879,7 +960,78 @@ func (r *Router) showPackages(ctx context.Context, chatID int64) error {
 	return nil
 }
 
-func formatPackageOfferLine(p db.Package) string {
+func orderPublicPackages(pkgs []db.Package) []db.Package {
+	byCode := make(map[string]db.Package, len(pkgs))
+	for _, p := range pkgs {
+		byCode[p.Code] = p
+	}
+	order := []string{"base_minimum", "golden_middle", "luxury_maximum", "boost_10_2"}
+	out := make([]db.Package, 0, len(pkgs))
+	used := make(map[string]struct{}, len(order))
+	for _, code := range order {
+		if p, ok := byCode[code]; ok {
+			out = append(out, p)
+			used[code] = struct{}{}
+		}
+	}
+	for _, p := range pkgs {
+		if _, ok := used[p.Code]; ok {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func packageButtonLabel(p db.Package) string {
+	switch p.Code {
+	case "base_minimum":
+		return "Базовый минимум"
+	case "golden_middle":
+		return "Золотая середина"
+	case "luxury_maximum":
+		return "Роскошный максимум"
+	case "boost_10_2":
+		return "Хочу буст!"
+	default:
+		return p.Title
+	}
+}
+
+func buildPackagesMenuText() string {
+	return strings.Join([]string{
+		"У нас три варианта как мы можем дальше сотрудничать",
+		"",
+		"1. Базовый минимум: 690 руб",
+		"- Доступ ко всем моделям",
+		"- 30 генераций фотографий ",
+		"- 5 видео генераций",
+		"",
+		"2. Золотая середина: 1490 руб",
+		"- 100 фото генераций",
+		"- 10 видео генераций",
+		"",
+		"3. Роскошный максимум 3190 руб",
+		"- 200 фото генераций",
+		"- 25 видео генераций",
+		"",
+		"Плюс в любой момент можете добавить буст вашей подписки: + 10 фото и 2 видео генераций - 290 рублей",
+	}, "\n")
+}
+
+func isMostPopularTitle(title string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(title)), "most popular")
+}
+
+func isBoostPackage(p db.Package) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(p.Code)), "boost")
+}
+
+func isBasePackage(p db.Package) bool {
+	return !isBoostPackage(p) && (p.ImageCredits > 0 || p.VideoCredits > 0)
+}
+
+func legacyPackageOfferLine(p db.Package) string {
 	switch {
 	case p.ImageCredits > 0 && p.VideoCredits == 0:
 		unit := float64(p.PriceRub) / float64(p.ImageCredits)
@@ -896,42 +1048,6 @@ func formatPackageOfferLine(p db.Package) string {
 	default:
 		return fmt.Sprintf("• %s — %d ₽", p.Title, p.PriceRub)
 	}
-}
-
-func packageButtonLabel(p db.Package) string {
-	switch {
-	case p.ImageCredits > 0 && p.VideoCredits == 0:
-		return fmt.Sprintf("📷 %s · %d фото · %d ₽", p.Title, p.ImageCredits, p.PriceRub)
-	case p.VideoCredits > 0 && p.ImageCredits == 0:
-		return fmt.Sprintf("🎬 %s · %d видео · %d ₽", p.Title, p.VideoCredits, p.PriceRub)
-	case p.ImageCredits > 0 && p.VideoCredits > 0:
-		title := p.Title
-		if isMostPopularTitle(title) {
-			title = "🔥 " + strings.TrimSpace(strings.ReplaceAll(title, "(Most Popular)", ""))
-		}
-		return fmt.Sprintf("✨ %s · %d+%d · %d ₽", title, p.ImageCredits, p.VideoCredits, p.PriceRub)
-	default:
-		return p.Title
-	}
-}
-
-func buildPackagesMenuText(photoLines, videoLines, comboLines []string) string {
-	parts := []string{"Тарифы"}
-	if len(photoLines) > 0 {
-		parts = append(parts, "", "📷 Фото", strings.Join(photoLines, "\n"))
-	}
-	if len(videoLines) > 0 {
-		parts = append(parts, "", "🎬 Видео", strings.Join(videoLines, "\n"))
-	}
-	if len(comboLines) > 0 {
-		parts = append(parts, "", "✨ Комбо", strings.Join(comboLines, "\n"))
-	}
-	parts = append(parts, "", "Чем больше пакет, тем выгоднее цена за попытку.")
-	return strings.Join(parts, "\n")
-}
-
-func isMostPopularTitle(title string) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(title)), "most popular")
 }
 
 func (r *Router) ensureConvID(ctx context.Context, userID int64, kind string) (uuid.UUID, error) {

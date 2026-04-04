@@ -18,12 +18,11 @@ var modelRegistry = map[string][]ModelOption{
 	"image": {
 		{UIName: "GPT 4o Image", ProviderID: "gpt-4o-image", IsDefault: true},
 		{UIName: "Gemini 2.5 (Nano Banana)", ProviderID: "gemini-3.1-flash-image-preview"},
-		{UIName: "DALL-E 3", ProviderID: "dall-e-3"},
-		{UIName: "Midjourney", ProviderID: "mj_fast_high_variation"},
+		{UIName: "Kling", ProviderID: "kling-v2"},
 	},
 	"video": {
 		{UIName: "Sora 2", ProviderID: "sora-2", IsDefault: true},
-		{UIName: "Kling", ProviderID: "kling"},
+		{UIName: "Kling", ProviderID: "kling-v1-6"},
 		{UIName: "Veo 3", ProviderID: "veo3.1"},
 	},
 }
