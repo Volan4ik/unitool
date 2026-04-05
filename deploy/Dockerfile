@@ -8,8 +8,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bot ./cmd/bot
 
-FROM gcr.io/distroless/base-debian12:nonroot
+FROM alpine:3.21
 WORKDIR /
+RUN adduser -D -H -u 65532 nonroot
 COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=build /etc/ssl/certs /etc/ssl/certs
 COPY --from=build /bot /bot
