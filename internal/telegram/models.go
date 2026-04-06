@@ -17,7 +17,7 @@ var modelRegistry = map[string][]ModelOption{
 	},
 	"image": {
 		{UIName: "GPT 4o Image", ProviderID: "gpt-4o-image", IsDefault: true},
-		{UIName: "Gemini 2.5 (Nano Banana)", ProviderID: "gemini-3.1-flash-image-preview"},
+		{UIName: "Nano Banana", ProviderID: "gemini-3.1-flash-image-preview"},
 		{UIName: "Kling", ProviderID: "kling-v2"},
 	},
 	"video": {

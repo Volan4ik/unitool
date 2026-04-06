@@ -43,7 +43,7 @@ func TestModelUIListStableOrder(t *testing.T) {
 		},
 		{
 			mode: "image",
-			want: []string{"GPT 4o Image", "Gemini 2.5 (Nano Banana)", "Kling"},
+			want: []string{"GPT 4o Image", "Nano Banana", "Kling"},
 		},
 		{
 			mode: "video",

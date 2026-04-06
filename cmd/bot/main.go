@@ -33,10 +33,45 @@ import (
 	"unitool/internal/workers"
 	cometprov "unitool/pkg/provider/comet"
 
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const webhookUpdateTimeout = 15 * time.Second
+
+type updateDispatchResult struct {
+	handled bool
+	queued  bool
+}
+
+func shouldHandleUpdateSynchronously(upd *tgbotapi.Update) bool {
+	return upd != nil && upd.PreCheckoutQuery != nil
+}
+
+func dispatchTelegramUpdate(
+	upd *tgbotapi.Update,
+	process func() error,
+	submit func(workers.Job) bool,
+) (updateDispatchResult, error) {
+	if shouldHandleUpdateSynchronously(upd) {
+		if process == nil {
+			return updateDispatchResult{}, nil
+		}
+		return updateDispatchResult{handled: true}, process()
+	}
+	if submit == nil {
+		return updateDispatchResult{}, nil
+	}
+	if submit(func(context.Context) error {
+		if process == nil {
+			return nil
+		}
+		return process()
+	}) {
+		return updateDispatchResult{queued: true}, nil
+	}
+	return updateDispatchResult{}, nil
+}
 
 func main() {
 	cfg, err := config.Load()
@@ -190,7 +225,7 @@ func main() {
 				return
 			}
 		}
-		if !updatePool.TrySubmit(func(context.Context) (jobErr error) {
+		processUpdate := func() (jobErr error) {
 			markFailed := func(errText string) {
 				if updateID <= 0 {
 					return
@@ -270,7 +305,15 @@ func main() {
 				cancel()
 			}
 			return nil
-		}) {
+		}
+		dispatchResult, dispatchErr := dispatchTelegramUpdate(upd, processUpdate, updatePool.TrySubmit)
+		if dispatchErr != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": dispatchErr.Error()})
+			return
+		}
+		if !dispatchResult.handled && !dispatchResult.queued {
 			if updateID > 0 {
 				failCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				_, _ = queries.MarkUpdateFailed(failCtx, db.MarkUpdateFailedParams{
