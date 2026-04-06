@@ -138,6 +138,7 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 	if sp == nil {
 		return nil
 	}
+	buyerEmail := buyerEmailText(sp)
 	payload := sp.InvoicePayload
 	if payload == "" {
 		return nil
@@ -175,7 +176,7 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 			ID:                      pgtype.UUID{Bytes: orderUUID, Valid: true},
 			TgPaymentChargeID:       pgtype.Text{String: sp.TelegramPaymentChargeID, Valid: sp.TelegramPaymentChargeID != ""},
 			ProviderPaymentChargeID: pgtype.Text{String: sp.ProviderPaymentChargeID, Valid: sp.ProviderPaymentChargeID != ""},
-			BuyerEmail:              pgtype.Text{},
+			BuyerEmail:              buyerEmail,
 		})
 		if markErr != nil {
 			log.Printf("payment: mark manual review failed order=%s err=%v", orderUUID.String(), markErr)
@@ -221,7 +222,7 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 		ID:                      pgtype.UUID{Bytes: orderUUID, Valid: true},
 		TgPaymentChargeID:       pgtype.Text{String: sp.TelegramPaymentChargeID, Valid: sp.TelegramPaymentChargeID != ""},
 		ProviderPaymentChargeID: pgtype.Text{String: sp.ProviderPaymentChargeID, Valid: sp.ProviderPaymentChargeID != ""},
-		BuyerEmail:              pgtype.Text{},
+		BuyerEmail:              buyerEmail,
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			current, gerr := s.Q.GetOrderByID(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
@@ -471,4 +472,15 @@ func buildProviderDataReceipt(title string, priceRub int, email string) string {
 	var buf bytes.Buffer
 	_ = json.NewEncoder(&buf).Encode(pd)
 	return buf.String()
+}
+
+func buyerEmailText(sp *tgbotapi.SuccessfulPayment) pgtype.Text {
+	if sp == nil || sp.OrderInfo == nil {
+		return pgtype.Text{}
+	}
+	email := strings.TrimSpace(sp.OrderInfo.Email)
+	if email == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: email, Valid: true}
 }

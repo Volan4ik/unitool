@@ -161,6 +161,7 @@ func (dbx *paymentDB) Exec(_ context.Context, query string, args ...interface{})
 			dbx.store.order.PaidAt = pgtype.Timestamptz{Valid: true}
 			dbx.store.order.TgPaymentChargeID = args[1].(pgtype.Text)
 			dbx.store.order.ProviderPaymentChargeID = args[2].(pgtype.Text)
+			dbx.store.order.BuyerEmail = args[3].(pgtype.Text)
 			return pgconn.NewCommandTag("UPDATE 1"), nil
 		}
 		return pgconn.NewCommandTag("UPDATE 0"), nil
@@ -286,6 +287,7 @@ func (tx *paymentTx) QueryRow(_ context.Context, query string, args ...interface
 		tx.store.order.PaidAt = pgtype.Timestamptz{Valid: true}
 		tx.store.order.TgPaymentChargeID = args[1].(pgtype.Text)
 		tx.store.order.ProviderPaymentChargeID = args[2].(pgtype.Text)
+		tx.store.order.BuyerEmail = args[3].(pgtype.Text)
 		return &paymentFakeRow{values: []any{tx.store.order.ID}}
 	case strings.Contains(query, "name: GetPackageByID"):
 		return paymentRowFromPackage(tx.store.pkg)
@@ -486,6 +488,7 @@ func TestHandleSuccessfulPaymentBannedUserMovesOrderToManualReview(t *testing.T)
 			InvoicePayload:          orderID.String(),
 			Currency:                "RUB",
 			TotalAmount:             int(store.pkg.PriceRub) * 100,
+			OrderInfo:               &tgbotapi.OrderInfo{Email: "buyer@example.com"},
 			TelegramPaymentChargeID: "tg-charge-1",
 			ProviderPaymentChargeID: "provider-charge-1",
 		},
@@ -499,6 +502,9 @@ func TestHandleSuccessfulPaymentBannedUserMovesOrderToManualReview(t *testing.T)
 	}
 	if store.markManualReviewCalls != 1 {
 		t.Fatalf("expected one manual review transition, got %d", store.markManualReviewCalls)
+	}
+	if !store.order.BuyerEmail.Valid || store.order.BuyerEmail.String != "buyer@example.com" {
+		t.Fatalf("expected buyer email to be stored, got %#v", store.order.BuyerEmail)
 	}
 	if store.addCreditsCalls != 0 {
 		t.Fatalf("expected no credits to be granted, got %d", store.addCreditsCalls)
@@ -529,6 +535,7 @@ func TestHandleSuccessfulPaymentDuplicateDoesNotDoubleCredit(t *testing.T) {
 			InvoicePayload:          orderID.String(),
 			Currency:                "RUB",
 			TotalAmount:             int(store.order.AmountRub) * 100,
+			OrderInfo:               &tgbotapi.OrderInfo{Email: "buyer@example.com"},
 			TelegramPaymentChargeID: "tg-charge-1",
 			ProviderPaymentChargeID: "provider-charge-1",
 		},
@@ -546,6 +553,9 @@ func TestHandleSuccessfulPaymentDuplicateDoesNotDoubleCredit(t *testing.T) {
 	}
 	if store.order.Status != "paid" {
 		t.Fatalf("expected order status paid, got %q", store.order.Status)
+	}
+	if !store.order.BuyerEmail.Valid || store.order.BuyerEmail.String != "buyer@example.com" {
+		t.Fatalf("expected buyer email to be stored, got %#v", store.order.BuyerEmail)
 	}
 	if store.rollbackCalls != 1 {
 		t.Fatalf("expected one rollback for duplicate tx, got %d", store.rollbackCalls)
