@@ -106,6 +106,8 @@ func (s *Service) SendInvoiceForPackage(ctx context.Context, chatID int64, userI
 
 	_, err = s.Bot.Send(inv)
 	if err != nil {
+		log.Printf("payment: send invoice failed order=%s user_id=%d package_id=%d err=%v", orderUUID.String(), userID, pkg.ID, err)
+		s.failOrder(dbCtx, orderUUID, "invoice_send_failed")
 		return "", err
 	}
 	return orderUUID.String(), nil
