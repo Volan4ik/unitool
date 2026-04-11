@@ -69,7 +69,7 @@ const (
 	defaultSourceTag   = "organic"
 	maxSourceTagLen    = 64
 	supportContact     = "@helpper"
-	channelURL         = "https://example.com"
+	channelURL         = "@loonagpt"
 )
 
 var errEmptyModelResponse = errors.New("empty model response")
@@ -193,15 +193,15 @@ func startGreetingText(m *tgbotapi.Message) string {
 			"Что он умеет?\n"+
 			"- Генерация изображений любой сложности с помощью Nano Banana / Chat GPT / Kling\n"+
 			"- Cоздание анимаций и видео с помощью Veo3 / Sora / Kling\n\n"+
-			"Продолжая использование Вы принимаете пользовательское <a href=\"https://example.com\">соглашение</a>.\n\n"+
+			"Продолжая использование Вы принимаете пользовательское <a href=\"https://teletype.in/@loonagpt\">соглашение</a>.\n\n"+
 			"Так как Вы пришли от наших друзей, мы дарим Вам тестовые 5 генераций. Приступим?",
 		name,
 	)
 }
 
 func buildHelpText() string {
-	return "Главная задача нашего бота - генерация фото и видео контента  с помощью нейросетей по промту (описание) пользователя.  У нас под капотом три новейшие модели для генерации фото - Nano Banana, MidJourney и Chat GPT. И Veo3, Sora и Kling - для видео. Перед генерацией ты выбираешь модель, задаешь ей промт и получаешь результат.\n\n" +
-		"Подробнее про отличия моделей ты можешь узнать в нашем канале - <a href=\"" + channelURL + "\">название</a>. Там кстати есть еще библиотека промтов для ИИ фотосессий, и не только)"
+	return "Главная задача нашего бота - генерация фото и видео контента  с помощью нейросетей по промту (описание) пользователя.  У нас под капотом три новейшие модели для генерации фото - Nano Banana, Chat GPT и Kling. И Veo3, Sora и Kling - для видео. Перед генерацией ты выбираешь модель, задаешь ей промт и получаешь результат.\n\n" +
+		"Подробнее про отличия моделей ты можешь узнать в нашем канале - <a href=\"" + channelURL + "\">Лýна</a>. Там кстати есть еще библиотека промтов для ИИ фотосессий, и не только)"
 }
 
 func (r *Router) sendHelpMessage(chatID int64) error {
@@ -786,10 +786,6 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 		if _, err := r.Bot.API.Request(edit); err != nil {
 			return err
 		}
-		if mode == "video" {
-			break
-		}
-		_, _ = r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Режим %s включён. Отправьте описание.", kindToRus(mode))))
 	case "buy":
 		if len(parts) < 2 {
 			return nil
@@ -881,7 +877,8 @@ func isModeChooserMessage(msg *tgbotapi.Message) bool {
 
 func (r *Router) sendModelsMenu(chatID int64, mode, selected string) error {
 	kb := ModelsInlineKeyboard(mode, selected)
-	msg := tgbotapi.NewMessage(chatID, "Выберите модель:")
+	msg := tgbotapi.NewMessage(chatID, "<b>Выберите модель, а затем напишите, что хотите сгенерировать</b>")
+	msg.ParseMode = tgbotapi.ModeHTML
 	msg.ReplyMarkup = kb
 	if _, err := r.Bot.API.Send(msg); err != nil {
 		return err
@@ -905,10 +902,10 @@ func (r *Router) showProfile(ctx context.Context, chatID, userID int64) error {
 
 	text := fmt.Sprintf(
 		"<b>Профиль</b>\n\n"+
-			"Мой тарифный план: %s\n\n"+
-			"Осталось генераций фото: %d\n"+
-			"Осталось генераций видео: %d\n\n"+
-			"Ссылка на наш канал: %s",
+			"<b>Мой тарифный план:</b> %s\n\n"+
+			"<b>Осталось генераций фото:</b> %d\n"+
+			"<b>Осталось генераций видео:</b> %d\n\n"+
+			"<b>Наш канал:</b> %s",
 		html.EscapeString(planName),
 		bal.ImageBalance,
 		bal.VideoBalance,
@@ -953,6 +950,7 @@ func (r *Router) showPackages(ctx context.Context, chatID int64) error {
 	text := buildPackagesMenuText()
 	kb := PackagesInlineKeyboard(buttons)
 	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = tgbotapi.ModeHTML
 	msg.ReplyMarkup = kb
 	if _, err := r.Bot.API.Send(msg); err != nil {
 		return err
@@ -1000,27 +998,23 @@ func packageButtonLabel(p db.Package) string {
 
 func buildPackagesMenuText() string {
 	return strings.Join([]string{
-		"У нас три варианта как мы можем дальше сотрудничать",
+		"<b>Виберите один из пакетов</b>",
 		"",
-		"1. Базовый минимум: 690 руб",
+		"<b>1. Базовый минимум: 690 руб</b>",
 		"- Доступ ко всем моделям",
 		"- 30 генераций фотографий ",
 		"- 5 видео генераций",
 		"",
-		"2. Золотая середина: 1490 руб",
+		"<b>2. Золотая середина: 1490 руб</b>",
 		"- 100 фото генераций",
 		"- 10 видео генераций",
 		"",
-		"3. Роскошный максимум 3190 руб",
+		"<b>3. Роскошный максимум 3190 руб</b>",
 		"- 200 фото генераций",
 		"- 25 видео генераций",
 		"",
-		"Плюс в любой момент можете добавить буст вашей подписки: + 10 фото и 2 видео генераций - 290 рублей",
+		"<i>В любой момент можете добавить буст вашей подписки: + 10 фото и 2 видео генераций - 290 рублей</i>",
 	}, "\n")
-}
-
-func isMostPopularTitle(title string) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(title)), "most popular")
 }
 
 func isBoostPackage(p db.Package) bool {
@@ -1029,25 +1023,6 @@ func isBoostPackage(p db.Package) bool {
 
 func isBasePackage(p db.Package) bool {
 	return !isBoostPackage(p) && (p.ImageCredits > 0 || p.VideoCredits > 0)
-}
-
-func legacyPackageOfferLine(p db.Package) string {
-	switch {
-	case p.ImageCredits > 0 && p.VideoCredits == 0:
-		unit := float64(p.PriceRub) / float64(p.ImageCredits)
-		return fmt.Sprintf("• %s — %d фото · %d ₽ (%.2f ₽/фото)", p.Title, p.ImageCredits, p.PriceRub, unit)
-	case p.VideoCredits > 0 && p.ImageCredits == 0:
-		unit := float64(p.PriceRub) / float64(p.VideoCredits)
-		return fmt.Sprintf("• %s — %d видео · %d ₽ (%.2f ₽/видео)", p.Title, p.VideoCredits, p.PriceRub, unit)
-	case p.ImageCredits > 0 && p.VideoCredits > 0:
-		title := p.Title
-		if isMostPopularTitle(title) {
-			title = "🔥 " + title
-		}
-		return fmt.Sprintf("• %s — %d фото + %d видео · %d ₽", title, p.ImageCredits, p.VideoCredits, p.PriceRub)
-	default:
-		return fmt.Sprintf("• %s — %d ₽", p.Title, p.PriceRub)
-	}
 }
 
 func (r *Router) ensureConvID(ctx context.Context, userID int64, kind string) (uuid.UUID, error) {

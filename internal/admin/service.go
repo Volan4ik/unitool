@@ -124,14 +124,6 @@ func (s *Service) FindUsersByUsername(ctx context.Context, term string, limit in
 	})
 }
 
-func (s *Service) BuildUserCardByID(ctx context.Context, id int64) (UserCard, error) {
-	u, err := s.Q.GetUserByID(ctx, id)
-	if err != nil {
-		return UserCard{}, err
-	}
-	return s.buildUserCard(ctx, u)
-}
-
 func (s *Service) SetBanByTGID(ctx context.Context, adminTGID, targetTGID int64, banned bool, reason string) error {
 	target, err := s.Q.GetUserByTGID(ctx, targetTGID)
 	if err != nil {
@@ -154,14 +146,6 @@ func (s *Service) SetBanByTGID(ctx context.Context, adminTGID, targetTGID int64,
 	}
 	log.Printf("admin action=%s admin_tg_id=%d target_tg_id=%d reason=%q", action, adminTGID, targetTGID, reason)
 	return nil
-}
-
-func (s *Service) IsUserBanned(ctx context.Context, tgID int64) (bool, error) {
-	u, err := s.Q.GetUserByTGID(ctx, tgID)
-	if err != nil {
-		return false, err
-	}
-	return u.IsBanned, nil
 }
 
 func (s *Service) GetStats(ctx context.Context, topN int32) (Stats, error) {

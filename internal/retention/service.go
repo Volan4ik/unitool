@@ -3,7 +3,6 @@ package retention
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -162,11 +161,4 @@ func nextDailyRunUTC(now time.Time, hhmm string) (time.Time, error) {
 		return time.Time{}, errors.New("internal: expected UTC time")
 	}
 	return next, nil
-}
-
-func (s *Service) String() string {
-	return fmt.Sprintf(
-		"retention(at=%s, chat=%d, ledger=%d, requests=%d, updates=%d)",
-		s.atHHMMUTC, s.keepChatDays, s.keepLedgerDays, s.keepRequestDays, s.keepUpdatesDays,
-	)
 }

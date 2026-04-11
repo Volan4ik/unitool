@@ -43,7 +43,7 @@ const (
 	maxInlineImageBytes   = 15 * 1024 * 1024
 	maxProviderOutputSize = 512
 	staleFailReason       = "stale running job exhausted attempts"
-	promptRulesURL        = "https://example.com/prompt-rules"
+	promptRulesURL        = "https://teletype.in/@loonagpt"
 )
 
 var downloadMediaFn = downloadMediaBytes

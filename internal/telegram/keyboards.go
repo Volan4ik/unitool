@@ -23,7 +23,7 @@ func ProfileInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("Пополнить баланс", "buy:menu"),
-			tgbotapi.NewInlineKeyboardButtonURL("Написать в поддержку", "https://t.me/script_train_support"),
+			tgbotapi.NewInlineKeyboardButtonURL("Написать в поддержку", "https://t.me/rusdev77"),
 		),
 	)
 }
@@ -40,7 +40,7 @@ func InsufficientBalanceInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 func HelpInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL("Написать в поддержку", "https://t.me/script_train_support"),
+			tgbotapi.NewInlineKeyboardButtonURL("Написать в поддержку", "https://t.me/rusdev77"),
 		),
 	)
 }
