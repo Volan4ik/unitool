@@ -109,6 +109,52 @@ func TestMessagePromptText(t *testing.T) {
 	}
 }
 
+func TestRepliedMediaFileIDText(t *testing.T) {
+	if txt, ok := repliedMediaFileIDText(nil); ok || txt != "" {
+		t.Fatalf("nil message must be empty, got ok=%v txt=%q", ok, txt)
+	}
+
+	t.Run("animation", func(t *testing.T) {
+		msg := &tgbotapi.Message{
+			ReplyToMessage: &tgbotapi.Message{
+				Animation: &tgbotapi.Animation{
+					FileID:       "anim-file-id",
+					FileUniqueID: "anim-uniq-id",
+				},
+			},
+		}
+		txt, ok := repliedMediaFileIDText(msg)
+		if !ok {
+			t.Fatal("expected ok")
+		}
+		if !strings.Contains(txt, "anim-file-id") {
+			t.Fatalf("missing file id in text=%q", txt)
+		}
+		if !strings.Contains(txt, "START_GUIDE_ANIMATION=anim-file-id") {
+			t.Fatalf("missing env hint in text=%q", txt)
+		}
+	})
+
+	t.Run("document", func(t *testing.T) {
+		msg := &tgbotapi.Message{
+			ReplyToMessage: &tgbotapi.Message{
+				Document: &tgbotapi.Document{
+					FileID:       "doc-file-id",
+					FileUniqueID: "doc-uniq-id",
+					MimeType:     "video/mp4",
+				},
+			},
+		}
+		txt, ok := repliedMediaFileIDText(msg)
+		if !ok {
+			t.Fatal("expected ok")
+		}
+		if !strings.Contains(txt, "doc-file-id") || !strings.Contains(txt, "video/mp4") {
+			t.Fatalf("unexpected text=%q", txt)
+		}
+	})
+}
+
 func TestSendStartGreeting(t *testing.T) {
 	t.Run("without animation", func(t *testing.T) {
 		api, mock := newTelegramBotMock(t)
