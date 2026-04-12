@@ -63,6 +63,20 @@ func TestBuyerEmailText(t *testing.T) {
 	}
 }
 
+func TestBuyerEmailFromOrderInfo(t *testing.T) {
+	info := &tgbotapi.OrderInfo{Email: " user2@example.com "}
+	got := buyerEmailFromOrderInfo(info)
+	if !got.Valid || got.String != "user2@example.com" {
+		t.Fatalf("unexpected email text: %+v", got)
+	}
+	if got := buyerEmailFromOrderInfo(&tgbotapi.OrderInfo{}); got.Valid {
+		t.Fatalf("expected invalid text for empty order info, got %+v", got)
+	}
+	if got := buyerEmailFromOrderInfo(nil); got.Valid {
+		t.Fatalf("expected invalid text for nil order info, got %+v", got)
+	}
+}
+
 func TestBoostRestrictionMessage(t *testing.T) {
 	msg := boostRestrictionMessage()
 	if msg == "" {

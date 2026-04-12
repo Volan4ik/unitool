@@ -8,7 +8,8 @@ RETURNING id, user_id, package_id, amount_rub, currency,
 
 -- name: MarkOrderPrecheckout :execrows
 UPDATE orders
-SET status='precheckout_ok'
+SET status='precheckout_ok',
+    buyer_email = COALESCE($2, buyer_email)
 WHERE id=$1
   AND status='created';
 

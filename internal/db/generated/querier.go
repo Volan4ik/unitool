@@ -49,7 +49,7 @@ type Querier interface {
 	MarkOrderFailed(ctx context.Context, id pgtype.UUID) (int64, error)
 	MarkOrderManualReview(ctx context.Context, arg MarkOrderManualReviewParams) (int64, error)
 	MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (pgtype.UUID, error)
-	MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) (int64, error)
+	MarkOrderPrecheckout(ctx context.Context, arg MarkOrderPrecheckoutParams) (int64, error)
 	MarkUpdateDone(ctx context.Context, updateID int64) (int64, error)
 	MarkUpdateFailed(ctx context.Context, arg MarkUpdateFailedParams) (int64, error)
 	RefundImage(ctx context.Context, arg RefundImageParams) error

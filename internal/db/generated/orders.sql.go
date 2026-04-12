@@ -192,13 +192,19 @@ func (q *Queries) MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (p
 
 const markOrderPrecheckout = `-- name: MarkOrderPrecheckout :execrows
 UPDATE orders
-SET status='precheckout_ok'
+SET status='precheckout_ok',
+    buyer_email = COALESCE($2, buyer_email)
 WHERE id=$1
   AND status='created'
 `
 
-func (q *Queries) MarkOrderPrecheckout(ctx context.Context, id pgtype.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, markOrderPrecheckout, id)
+type MarkOrderPrecheckoutParams struct {
+	ID         pgtype.UUID `json:"id"`
+	BuyerEmail pgtype.Text `json:"buyer_email"`
+}
+
+func (q *Queries) MarkOrderPrecheckout(ctx context.Context, arg MarkOrderPrecheckoutParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markOrderPrecheckout, arg.ID, arg.BuyerEmail)
 	if err != nil {
 		return 0, err
 	}

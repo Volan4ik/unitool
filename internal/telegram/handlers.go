@@ -179,15 +179,21 @@ func (r *Router) sendStartGreeting(m *tgbotapi.Message) error {
 	if m == nil || m.Chat == nil {
 		return errors.New("start message is nil")
 	}
+	greeting := startGreetingText(m)
 
 	if src := strings.TrimSpace(r.StartGuideAnimation); src != "" {
 		anim := tgbotapi.NewAnimation(m.Chat.ID, startAnimationFile(src))
-		if _, err := r.Bot.API.Send(anim); err != nil {
+		anim.Caption = greeting
+		anim.ParseMode = tgbotapi.ModeHTML
+		anim.ReplyMarkup = WelcomeInlineKeyboard()
+		if _, err := r.Bot.API.Send(anim); err == nil {
+			return nil
+		} else {
 			log.Printf("send start animation failed chat_id=%d err=%v", m.Chat.ID, err)
 		}
 	}
 
-	greet := tgbotapi.NewMessage(m.Chat.ID, startGreetingText(m))
+	greet := tgbotapi.NewMessage(m.Chat.ID, greeting)
 	greet.ParseMode = tgbotapi.ModeHTML
 	greet.DisableWebPagePreview = true
 	greet.ReplyMarkup = WelcomeInlineKeyboard()

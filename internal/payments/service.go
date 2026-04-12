@@ -371,7 +371,11 @@ func (s *Service) validatePreCheckout(ctx context.Context, pcq *tgbotapi.PreChec
 		return false, "Временная ошибка подтверждения заказа", err
 	}
 
-	affected, err := s.Q.MarkOrderPrecheckout(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
+	buyerEmail := buyerEmailFromOrderInfo(pcq.OrderInfo)
+	affected, err := s.Q.MarkOrderPrecheckout(dbCtx, db.MarkOrderPrecheckoutParams{
+		ID:         pgtype.UUID{Bytes: orderUUID, Valid: true},
+		BuyerEmail: buyerEmail,
+	})
 	if err != nil {
 		log.Printf("mark precheckout failed: %v", err)
 		return false, "Временная ошибка подтверждения заказа", err
@@ -477,10 +481,17 @@ func buildProviderDataReceipt(title string, priceRub int, email string) string {
 }
 
 func buyerEmailText(sp *tgbotapi.SuccessfulPayment) pgtype.Text {
-	if sp == nil || sp.OrderInfo == nil {
+	if sp == nil {
 		return pgtype.Text{}
 	}
-	email := strings.TrimSpace(sp.OrderInfo.Email)
+	return buyerEmailFromOrderInfo(sp.OrderInfo)
+}
+
+func buyerEmailFromOrderInfo(info *tgbotapi.OrderInfo) pgtype.Text {
+	if info == nil {
+		return pgtype.Text{}
+	}
+	email := strings.TrimSpace(info.Email)
 	if email == "" {
 		return pgtype.Text{}
 	}
