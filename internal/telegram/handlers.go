@@ -163,8 +163,6 @@ func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID 
 		}
 	case "help":
 		return r.sendHelpMessage(m.Chat.ID)
-	case "fileid":
-		return r.sendRepliedMediaFileID(m)
 	case "admin":
 		return r.handleAdminCommand(ctx, m)
 	default:
@@ -175,63 +173,6 @@ func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID 
 		}
 	}
 	return nil
-}
-
-func (r *Router) sendRepliedMediaFileID(m *tgbotapi.Message) error {
-	if m == nil || m.Chat == nil {
-		return errors.New("fileid message is nil")
-	}
-	text, ok := repliedMediaFileIDText(m)
-	if !ok {
-		text = "Ответьте командой /fileid на сообщение с GIF/видео/документом/фото."
-	}
-	msg := tgbotapi.NewMessage(m.Chat.ID, text)
-	if _, err := r.Bot.API.Send(msg); err != nil {
-		return err
-	}
-	return nil
-}
-
-func repliedMediaFileIDText(m *tgbotapi.Message) (string, bool) {
-	if m == nil || m.ReplyToMessage == nil {
-		return "", false
-	}
-	src := m.ReplyToMessage
-
-	if src.Animation != nil {
-		return fmt.Sprintf(
-			"type: animation\nfile_id: %s\nfile_unique_id: %s\n\nSTART_GUIDE_ANIMATION=%s",
-			src.Animation.FileID,
-			src.Animation.FileUniqueID,
-			src.Animation.FileID,
-		), true
-	}
-	if src.Video != nil {
-		return fmt.Sprintf(
-			"type: video\nfile_id: %s\nfile_unique_id: %s\nmime_type: %s\n\nSTART_GUIDE_ANIMATION=%s",
-			src.Video.FileID,
-			src.Video.FileUniqueID,
-			src.Video.MimeType,
-			src.Video.FileID,
-		), true
-	}
-	if src.Document != nil {
-		return fmt.Sprintf(
-			"type: document\nfile_id: %s\nfile_unique_id: %s\nmime_type: %s\n\nSTART_GUIDE_ANIMATION=%s",
-			src.Document.FileID,
-			src.Document.FileUniqueID,
-			src.Document.MimeType,
-			src.Document.FileID,
-		), true
-	}
-	if fileID := largestPhotoFileID(src.Photo); fileID != "" {
-		return fmt.Sprintf(
-			"type: photo\nfile_id: %s\n\nSTART_GUIDE_ANIMATION=%s",
-			fileID,
-			fileID,
-		), true
-	}
-	return "", false
 }
 
 func (r *Router) sendStartGreeting(m *tgbotapi.Message) error {
