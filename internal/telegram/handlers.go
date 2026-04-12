@@ -853,7 +853,15 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 			r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Пакет не найден: %s", code)))
 			return err
 		}
-		p := payments.Package{ID: pkg.ID, Code: pkg.Code, Title: pkg.Title, PriceRub: int(pkg.PriceRub)}
+		p := payments.Package{
+			ID:           pkg.ID,
+			Code:         pkg.Code,
+			Title:        pkg.Title,
+			PriceRub:     int(pkg.PriceRub),
+			TextCredits:  int(pkg.TextCredits),
+			ImageCredits: int(pkg.ImageCredits),
+			VideoCredits: int(pkg.VideoCredits),
+		}
 		if _, err := r.Pay.SendInvoiceForPackage(ctx, chatID, u.ID, p, ""); err != nil {
 			if errors.Is(err, payments.ErrPaymentUnavailableForBanned) {
 				r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Оплата недоступна для заблокированного аккаунта. Обратитесь к администратору."))
