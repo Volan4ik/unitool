@@ -44,6 +44,7 @@ func New(opts Options) (zerolog.Logger, io.Closer, error) {
 	var (
 		writers []io.Writer
 		closers []io.Closer
+		fileErr error
 	)
 	writers = append(writers, os.Stdout)
 
@@ -52,10 +53,11 @@ func New(opts Options) (zerolog.Logger, io.Closer, error) {
 		maxBytes := int64(opts.RotateMaxMB) * 1024 * 1024
 		fileWriter, err := newRotatingFileWriter(filePath, maxBytes, opts.RotateBackups)
 		if err != nil {
-			return zerolog.Logger{}, nil, err
+			fileErr = err
+		} else {
+			writers = append(writers, fileWriter)
+			closers = append(closers, fileWriter)
 		}
-		writers = append(writers, fileWriter)
-		closers = append(closers, fileWriter)
 	}
 
 	sink := io.MultiWriter(writers...)
@@ -80,6 +82,13 @@ func New(opts Options) (zerolog.Logger, io.Closer, error) {
 	stdlog.SetOutput(&stdLogBridge{
 		log: base.With().Str("source", "stdlib").Logger(),
 	})
+
+	if fileErr != nil {
+		base.Warn().
+			Err(fileErr).
+			Str("log_file_path", filePath).
+			Msg("file logging disabled; using stdout only")
+	}
 
 	var closer io.Closer
 	if len(closers) > 0 {

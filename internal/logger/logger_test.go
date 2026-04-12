@@ -7,7 +7,33 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
 )
+
+func TestNewFallsBackToStdoutWhenFilePathInvalid(t *testing.T) {
+	dir := t.TempDir()
+	notDir := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(notDir, []byte("x"), 0o644); err != nil {
+		t.Fatalf("prepare file: %v", err)
+	}
+
+	logg, closer, err := New(Options{
+		AppEnv:       "test",
+		Level:        "info",
+		FilePath:     filepath.Join(notDir, "bot.log"),
+		DedupeWindow: 0,
+	})
+	if err != nil {
+		t.Fatalf("logger init must fallback instead of failing: %v", err)
+	}
+	if closer != nil {
+		_ = closer.Close()
+	}
+	if logg.GetLevel() != zerolog.InfoLevel {
+		t.Fatalf("unexpected level=%s", logg.GetLevel())
+	}
+}
 
 func TestDedupeWriterSuppressesExactEventIgnoringTimestamp(t *testing.T) {
 	var out bytes.Buffer
