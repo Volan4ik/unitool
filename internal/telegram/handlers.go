@@ -26,16 +26,17 @@ import (
 )
 
 type Router struct {
-	Bot           *Bot
-	Admin         *admin.Service
-	Pay           *payments.Service
-	Q             *db.Queries
-	Notifier      BroadcastScheduler
-	Prov          provider.ModelProvider
-	RL            *rate.Limiter
-	Moderation    moderation.Client
-	EditThrottle  time.Duration
-	EditMaxPerMin int
+	Bot                 *Bot
+	Admin               *admin.Service
+	Pay                 *payments.Service
+	Q                   *db.Queries
+	Notifier            BroadcastScheduler
+	Prov                provider.ModelProvider
+	RL                  *rate.Limiter
+	Moderation          moderation.Client
+	EditThrottle        time.Duration
+	EditMaxPerMin       int
+	StartGuideAnimation string
 
 	adminIDsMu sync.RWMutex
 	adminIDs   map[int64]struct{}
@@ -85,25 +86,27 @@ func NewRouter(
 	mod moderation.Client,
 	editThrottle time.Duration,
 	editMaxPerMin int,
+	startGuideAnimation string,
 ) *Router {
 	idMap := make(map[int64]struct{}, len(adminIDs))
 	for _, id := range adminIDs {
 		idMap[id] = struct{}{}
 	}
 	return &Router{
-		Bot:           b,
-		Admin:         adminSvc,
-		Pay:           p,
-		Q:             q,
-		Prov:          prov,
-		RL:            rl,
-		Moderation:    mod,
-		EditThrottle:  editThrottle,
-		EditMaxPerMin: editMaxPerMin,
-		adminIDs:      idMap,
-		adminFlow:     make(map[int64]adminFlowState),
-		pendingRefs:   make(map[int64][]string),
-		mediaGroups:   make(map[string]*pendingMediaGroup),
+		Bot:                 b,
+		Admin:               adminSvc,
+		Pay:                 p,
+		Q:                   q,
+		Prov:                prov,
+		RL:                  rl,
+		Moderation:          mod,
+		EditThrottle:        editThrottle,
+		EditMaxPerMin:       editMaxPerMin,
+		StartGuideAnimation: strings.TrimSpace(startGuideAnimation),
+		adminIDs:            idMap,
+		adminFlow:           make(map[int64]adminFlowState),
+		pendingRefs:         make(map[int64][]string),
+		mediaGroups:         make(map[string]*pendingMediaGroup),
 	}
 }
 
@@ -155,11 +158,7 @@ func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID 
 			}
 			log.Printf("track start source failed user_id=%d tg_id=%d err=%v", userID, tgID, err)
 		}
-		greet := tgbotapi.NewMessage(m.Chat.ID, startGreetingText(m))
-		greet.ParseMode = tgbotapi.ModeHTML
-		greet.DisableWebPagePreview = true
-		greet.ReplyMarkup = WelcomeInlineKeyboard()
-		if _, err := r.Bot.API.Send(greet); err != nil {
+		if err := r.sendStartGreeting(m); err != nil {
 			return err
 		}
 	case "help":
@@ -174,6 +173,41 @@ func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID 
 		}
 	}
 	return nil
+}
+
+func (r *Router) sendStartGreeting(m *tgbotapi.Message) error {
+	if m == nil || m.Chat == nil {
+		return errors.New("start message is nil")
+	}
+
+	if src := strings.TrimSpace(r.StartGuideAnimation); src != "" {
+		anim := tgbotapi.NewAnimation(m.Chat.ID, startAnimationFile(src))
+		if _, err := r.Bot.API.Send(anim); err != nil {
+			log.Printf("send start animation failed chat_id=%d err=%v", m.Chat.ID, err)
+		}
+	}
+
+	greet := tgbotapi.NewMessage(m.Chat.ID, startGreetingText(m))
+	greet.ParseMode = tgbotapi.ModeHTML
+	greet.DisableWebPagePreview = true
+	greet.ReplyMarkup = WelcomeInlineKeyboard()
+	if _, err := r.Bot.API.Send(greet); err != nil {
+		return err
+	}
+	return nil
+}
+
+func startAnimationFile(source string) tgbotapi.RequestFileData {
+	s := strings.TrimSpace(source)
+	lower := strings.ToLower(s)
+	switch {
+	case strings.HasPrefix(lower, "https://"), strings.HasPrefix(lower, "http://"):
+		return tgbotapi.FileURL(s)
+	case strings.HasPrefix(lower, "file://"):
+		return tgbotapi.FilePath(s[len("file://"):])
+	default:
+		return tgbotapi.FileID(s)
+	}
 }
 
 func startGreetingText(m *tgbotapi.Message) string {
@@ -256,9 +290,9 @@ func normalizeSourceTag(raw string) string {
 }
 
 func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID int64) error {
-	txt := strings.TrimSpace(m.Text)
+	text := strings.TrimSpace(m.Text)
 	if m.From != nil {
-		handled, err := r.handleAdminTextInput(ctx, m, m.From.ID, txt)
+		handled, err := r.handleAdminTextInput(ctx, m, m.From.ID, text)
 		if err != nil {
 			return err
 		}
@@ -266,6 +300,7 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 			return nil
 		}
 	}
+	txt := messagePromptText(m)
 	if len(m.Photo) > 0 {
 		return r.handlePhotoMessage(ctx, m, userID)
 	}
@@ -320,6 +355,16 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 		return r.handleAsyncMediaPrompt(ctx, m, userID, kind, modelID, txt)
 	}
 	return r.handleSyncPrompt(ctx, m, userID, modelID, txt)
+}
+
+func messagePromptText(m *tgbotapi.Message) string {
+	if m == nil {
+		return ""
+	}
+	if txt := strings.TrimSpace(m.Text); txt != "" {
+		return txt
+	}
+	return strings.TrimSpace(m.Caption)
 }
 
 func (r *Router) selectMode(ctx context.Context, chatID, userID int64, mode string) error {

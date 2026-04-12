@@ -9,30 +9,38 @@ import (
 )
 
 type Config struct {
-	AppEnv          string        `envconfig:"APP_ENV" default:"dev"`
-	HTTPAddr        string        `envconfig:"HTTP_ADDR" default:":8080"`
-	MetricsAddr     string        `envconfig:"METRICS_ADDR" default:":9090"`
-	TelegramToken   string        `envconfig:"TELEGRAM_TOKEN" required:"true"`
-	ProviderToken   string        `envconfig:"PROVIDER_TOKEN" required:"true"` // BotFather payments token
-	WebhookURL      string        `envconfig:"WEBHOOK_URL" required:"true"`
-	WebhookSecret   string        `envconfig:"WEBHOOK_SECRET_TOKEN" required:"true"`
-	WebhookMaxBody  int64         `envconfig:"WEBHOOK_MAX_BODY_BYTES" default:"1048576"`
-	WebhookStaleSec int           `envconfig:"WEBHOOK_UPDATE_STALE_SEC" default:"300"`
-	DBURL           string        `envconfig:"DATABASE_URL" required:"true"`
-	DBMaxConns      int           `envconfig:"DB_MAX_CONNS" default:"120"`
-	DBMinConns      int           `envconfig:"DB_MIN_CONNS" default:"20"`
-	MaxWorkers      int           `envconfig:"MAX_WORKERS" default:"64"`
-	QueueBuffer     int           `envconfig:"QUEUE_BUFFER" default:"1024"`
-	AutoMigrate     bool          `envconfig:"AUTO_MIGRATE" default:"true"`
-	CometBase       string        `envconfig:"COMET_API_BASE" default:"https://api.cometapi.com"`
-	CometKey        string        `envconfig:"COMET_API_KEY" required:"true"`
-	CometTimeout    time.Duration `envconfig:"COMET_TIMEOUT" default:"25s"`
+	AppEnv            string        `envconfig:"APP_ENV" default:"dev"`
+	HTTPAddr          string        `envconfig:"HTTP_ADDR" default:":8080"`
+	MetricsAddr       string        `envconfig:"METRICS_ADDR" default:":9090"`
+	LogLevel          string        `envconfig:"LOG_LEVEL" default:"info"`
+	LogFilePath       string        `envconfig:"LOG_FILE_PATH" default:"./logs/bot.log"`
+	LogRotateMaxMB    int           `envconfig:"LOG_ROTATE_MAX_MB" default:"50"`
+	LogRotateBackups  int           `envconfig:"LOG_ROTATE_BACKUPS" default:"7"`
+	LogDedupeWindowMs int           `envconfig:"LOG_DEDUPE_WINDOW_MS" default:"1500"`
+	TelegramToken     string        `envconfig:"TELEGRAM_TOKEN" required:"true"`
+	ProviderToken     string        `envconfig:"PROVIDER_TOKEN" required:"true"` // BotFather payments token
+	WebhookURL        string        `envconfig:"WEBHOOK_URL" required:"true"`
+	WebhookSecret     string        `envconfig:"WEBHOOK_SECRET_TOKEN" required:"true"`
+	WebhookMaxBody    int64         `envconfig:"WEBHOOK_MAX_BODY_BYTES" default:"1048576"`
+	WebhookStaleSec   int           `envconfig:"WEBHOOK_UPDATE_STALE_SEC" default:"300"`
+	DBURL             string        `envconfig:"DATABASE_URL" required:"true"`
+	DBMaxConns        int           `envconfig:"DB_MAX_CONNS" default:"120"`
+	DBMinConns        int           `envconfig:"DB_MIN_CONNS" default:"20"`
+	MaxWorkers        int           `envconfig:"MAX_WORKERS" default:"64"`
+	QueueBuffer       int           `envconfig:"QUEUE_BUFFER" default:"1024"`
+	AutoMigrate       bool          `envconfig:"AUTO_MIGRATE" default:"true"`
+	CometBase         string        `envconfig:"COMET_API_BASE" default:"https://api.cometapi.com"`
+	CometKey          string        `envconfig:"COMET_API_KEY" required:"true"`
+	CometTimeout      time.Duration `envconfig:"COMET_TIMEOUT" default:"25s"`
 	// Provider rate limiting
 	CometRPS   int `envconfig:"COMET_RPS" default:"8"`
 	CometBurst int `envconfig:"COMET_BURST" default:"8"`
 	// Telegram streaming edit throttling
 	TGEditThrottleMs int `envconfig:"TG_EDIT_THROTTLE_MS" default:"900"`
 	TGEditMaxPerMin  int `envconfig:"TG_EDIT_MAX_PER_MIN" default:"40"`
+	// Optional start guide animation source for /start.
+	// Accepts Telegram file_id, HTTP(S) URL, or local path prefixed with file://
+	StartGuideAnimation string `envconfig:"START_GUIDE_ANIMATION" default:""`
 	// Async media generation workers
 	JobWorkers      int           `envconfig:"JOB_WORKERS" default:"4"`
 	JobPollMs       int           `envconfig:"JOB_POLL_MS" default:"700"`
@@ -60,6 +68,15 @@ func Load() (Config, error) {
 	}
 	if c.WebhookStaleSec <= 0 {
 		return c, fmt.Errorf("WEBHOOK_UPDATE_STALE_SEC must be > 0")
+	}
+	if c.LogRotateMaxMB < 0 {
+		return c, fmt.Errorf("LOG_ROTATE_MAX_MB must be >= 0")
+	}
+	if c.LogRotateBackups < 0 {
+		return c, fmt.Errorf("LOG_ROTATE_BACKUPS must be >= 0")
+	}
+	if c.LogDedupeWindowMs < 0 {
+		return c, fmt.Errorf("LOG_DEDUPE_WINDOW_MS must be >= 0")
 	}
 	return c, nil
 }

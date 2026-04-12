@@ -91,6 +91,87 @@ func TestStartGreetingAndHelpTexts(t *testing.T) {
 	}
 }
 
+func TestMessagePromptText(t *testing.T) {
+	if got := messagePromptText(nil); got != "" {
+		t.Fatalf("nil message got=%q want empty", got)
+	}
+
+	if got := messagePromptText(&tgbotapi.Message{Text: "  hello  ", Caption: "caption"}); got != "hello" {
+		t.Fatalf("text must have priority, got=%q", got)
+	}
+
+	if got := messagePromptText(&tgbotapi.Message{Caption: "  caption prompt  "}); got != "caption prompt" {
+		t.Fatalf("caption fallback got=%q", got)
+	}
+
+	if got := messagePromptText(&tgbotapi.Message{Text: "   ", Caption: "   "}); got != "" {
+		t.Fatalf("whitespace only got=%q want empty", got)
+	}
+}
+
+func TestSendStartGreeting(t *testing.T) {
+	t.Run("without animation", func(t *testing.T) {
+		api, mock := newTelegramBotMock(t)
+		r := &Router{Bot: &Bot{API: api}}
+		msg := &tgbotapi.Message{
+			Chat: &tgbotapi.Chat{ID: 42},
+			From: &tgbotapi.User{FirstName: "Vladimir"},
+		}
+		if err := r.sendStartGreeting(msg); err != nil {
+			t.Fatalf("unexpected err=%v", err)
+		}
+		if mock.callCount("sendAnimation") != 0 {
+			t.Fatalf("sendAnimation calls=%d want=0", mock.callCount("sendAnimation"))
+		}
+		if mock.callCount("sendMessage") != 1 {
+			t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
+		}
+	})
+
+	t.Run("with animation", func(t *testing.T) {
+		api, mock := newTelegramBotMock(t)
+		r := &Router{
+			Bot:                 &Bot{API: api},
+			StartGuideAnimation: "CgACAgIAAxkBAAIBQ2Y-file-id",
+		}
+		msg := &tgbotapi.Message{
+			Chat: &tgbotapi.Chat{ID: 42},
+			From: &tgbotapi.User{FirstName: "Vladimir"},
+		}
+		if err := r.sendStartGreeting(msg); err != nil {
+			t.Fatalf("unexpected err=%v", err)
+		}
+		if mock.callCount("sendAnimation") != 1 {
+			t.Fatalf("sendAnimation calls=%d want=1", mock.callCount("sendAnimation"))
+		}
+		if mock.callCount("sendMessage") != 1 {
+			t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
+		}
+	})
+
+	t.Run("animation failure does not block greeting text", func(t *testing.T) {
+		api, mock := newTelegramBotMock(t)
+		mock.setFail("sendAnimation", true)
+		r := &Router{
+			Bot:                 &Bot{API: api},
+			StartGuideAnimation: "https://example.com/how-to-use.gif",
+		}
+		msg := &tgbotapi.Message{
+			Chat: &tgbotapi.Chat{ID: 42},
+			From: &tgbotapi.User{FirstName: "Vladimir"},
+		}
+		if err := r.sendStartGreeting(msg); err != nil {
+			t.Fatalf("unexpected err=%v", err)
+		}
+		if mock.callCount("sendAnimation") != 1 {
+			t.Fatalf("sendAnimation calls=%d want=1", mock.callCount("sendAnimation"))
+		}
+		if mock.callCount("sendMessage") != 1 {
+			t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
+		}
+	})
+}
+
 func TestRouterStateMapsAndAdminCheck(t *testing.T) {
 	r := &Router{
 		adminIDs:    map[int64]struct{}{10: {}},

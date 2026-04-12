@@ -78,7 +78,24 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	logg := logger.New(cfg.AppEnv)
+	logg, logSink, err := logger.New(logger.Options{
+		AppEnv:        cfg.AppEnv,
+		Level:         cfg.LogLevel,
+		FilePath:      cfg.LogFilePath,
+		RotateMaxMB:   cfg.LogRotateMaxMB,
+		RotateBackups: cfg.LogRotateBackups,
+		DedupeWindow:  time.Duration(cfg.LogDedupeWindowMs) * time.Millisecond,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if logSink != nil {
+		defer func() {
+			if cerr := logSink.Close(); cerr != nil {
+				log.Printf("logger close failed: %v", cerr)
+			}
+		}()
+	}
 	metrics.Serve(cfg.MetricsAddr)
 	if cfg.CometKey == "" {
 		logg.Fatal().Msg("COMET_API_KEY is required")
@@ -125,7 +142,19 @@ func main() {
 		}
 		modClient = moderation.NewOpenAIClient(cfg.OpenAIBase, cfg.OpenAIKey, cfg.ModerationModel, cfg.ModerationTimeout)
 	}
-	router := telegram.NewRouter(bot, adminSvc, adminIDs, pay, queries, comet, rl, modClient, editThrottle, cfg.TGEditMaxPerMin)
+	router := telegram.NewRouter(
+		bot,
+		adminSvc,
+		adminIDs,
+		pay,
+		queries,
+		comet,
+		rl,
+		modClient,
+		editThrottle,
+		cfg.TGEditMaxPerMin,
+		cfg.StartGuideAnimation,
+	)
 	notifierSvc := notifier.NewService(pg, bot.API)
 	router.Notifier = notifierSvc
 	notifierSvc.Start(ctx)
