@@ -39,6 +39,7 @@ const (
 	mediaSendAttempts     = 3
 	mediaSendBaseBackoff  = 700 * time.Millisecond
 	mediaFetchTimeout     = 45 * time.Second
+	stateWriteTimeout     = 8 * time.Second
 	maxDownloadedMedia    = 80 * 1024 * 1024
 	maxInlineImageBytes   = 15 * 1024 * 1024
 	maxProviderOutputSize = 512
@@ -302,7 +303,9 @@ func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob,
 		if backoff < time.Second {
 			backoff = time.Second
 		}
-		rows, err := s.Q.RequeueGenerationJob(ctx, db.RequeueGenerationJobParams{
+		stateCtx, cancel := withStateWriteCtx(ctx)
+		defer cancel()
+		rows, err := s.Q.RequeueGenerationJob(stateCtx, db.RequeueGenerationJobParams{
 			ID:           job.ID,
 			ErrorMessage: pgtype.Text{String: errText, Valid: true},
 			NextAttemptAt: pgtype.Timestamptz{
@@ -312,8 +315,8 @@ func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob,
 		})
 		if err != nil {
 			log.Printf(
-				"generation: requeue failed job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d/%d err=%q requeue_err=%v",
-				job.ID, job.UserID, job.ChatID, job.Kind, job.Attempts, job.MaxAttempts, errText, err,
+				"generation: requeue failed job_id=%d user_id=%d chat_id=%d kind=%s model=%s attempt=%d/%d err=%q requeue_err=%v",
+				job.ID, job.UserID, job.ChatID, job.Kind, job.Model, job.Attempts, job.MaxAttempts, errText, err,
 			)
 			// Safe fallback: finalize as permanent failure for this running claim.
 			s.finalizeFailedAttempt(ctx, job, errText, latency)
@@ -321,14 +324,14 @@ func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob,
 		}
 		if rows == 0 {
 			log.Printf(
-				"generation: requeue skipped stale runner job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d/%d err=%q",
-				job.ID, job.UserID, job.ChatID, job.Kind, job.Attempts, job.MaxAttempts, errText,
+				"generation: requeue skipped stale runner job_id=%d user_id=%d chat_id=%d kind=%s model=%s attempt=%d/%d err=%q",
+				job.ID, job.UserID, job.ChatID, job.Kind, job.Model, job.Attempts, job.MaxAttempts, errText,
 			)
 			return
 		}
 		log.Printf(
-			"generation: requeue success job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d/%d err=%q",
-			job.ID, job.UserID, job.ChatID, job.Kind, job.Attempts, job.MaxAttempts, errText,
+			"generation: requeue success job_id=%d user_id=%d chat_id=%d kind=%s model=%s attempt=%d/%d err=%q",
+			job.ID, job.UserID, job.ChatID, job.Kind, job.Model, job.Attempts, job.MaxAttempts, errText,
 		)
 		return
 	}
@@ -337,21 +340,23 @@ func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob,
 }
 
 func (s *Service) finalizeFailedAttempt(ctx context.Context, job db.GenerationJob, errText string, latency int32) {
-	rows, err := s.Q.MarkGenerationJobFailed(ctx, db.MarkGenerationJobFailedParams{
+	stateCtx, cancel := withStateWriteCtx(ctx)
+	defer cancel()
+	rows, err := s.Q.MarkGenerationJobFailed(stateCtx, db.MarkGenerationJobFailedParams{
 		ID:           job.ID,
 		ErrorMessage: pgtype.Text{String: errText, Valid: true},
 	})
 	if err != nil {
 		log.Printf(
-			"generation: mark failed transition error job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
-			job.ID, job.UserID, job.ChatID, job.Kind, err,
+			"generation: mark failed transition error job_id=%d user_id=%d chat_id=%d kind=%s model=%s err=%v",
+			job.ID, job.UserID, job.ChatID, job.Kind, job.Model, err,
 		)
 		return
 	}
 	if rows == 0 {
 		log.Printf(
-			"generation: stale runner skip finalization job_id=%d user_id=%d chat_id=%d kind=%s err=%q",
-			job.ID, job.UserID, job.ChatID, job.Kind, errText,
+			"generation: stale runner skip finalization job_id=%d user_id=%d chat_id=%d kind=%s model=%s err=%q",
+			job.ID, job.UserID, job.ChatID, job.Kind, job.Model, errText,
 		)
 		return
 	}
@@ -371,7 +376,9 @@ func (s *Service) finalizeFailedSideEffects(
 	source string,
 	notifyUser bool,
 ) {
-	rows, err := s.Q.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
+	stateCtx, cancel := withStateWriteCtx(ctx)
+	defer cancel()
+	rows, err := s.Q.FailGenerationRequest(stateCtx, db.FailGenerationRequestParams{
 		ID:           genID,
 		Column2:      "failed",
 		ErrorMessage: pgtype.Text{String: errText, Valid: true},
@@ -399,7 +406,7 @@ func (s *Service) finalizeFailedSideEffects(
 		"source": source,
 		"err":    errText,
 	})
-	refundErr := s.refundOneCredit(ctx, userID, kind, meta, opKey)
+	refundErr := s.refundOneCredit(stateCtx, userID, kind, meta, opKey)
 	if refundErr != nil {
 		log.Printf(
 			"generation: refund failed job_id=%d gen_id=%d user_id=%d kind=%s source=%s op_key=%s err=%v reconcile_required=true",
@@ -561,6 +568,13 @@ func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, out
 		"generation: telegram fallback sent job_id=%d user_id=%d chat_id=%d kind=%s output=%q last_err=%v",
 		job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output), lastErr,
 	)
+}
+
+func withStateWriteCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent != nil && parent.Err() == nil {
+		return parent, func() {}
+	}
+	return context.WithTimeout(context.Background(), stateWriteTimeout)
 }
 
 func (s *Service) sendInlineImageResult(ctx context.Context, job db.GenerationJob, output string) {
