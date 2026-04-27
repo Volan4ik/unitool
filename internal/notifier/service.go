@@ -28,7 +28,8 @@ const (
 	msgOnboarding1h   = "Хочешь сделать что-то крутое? Начни с фото — это быстрее всего 📸"
 	msgNoPurchase24   = "⚡ У тебя почти получилось — открой доступ к полным возможностям"
 	msgReactivation2d = "👀 Мы добавили новые возможности — попробуй сейчас"
-	msgReactivation5d = "🔥 Дарим тебе бесплатные генерацию — вернись и попробуй"
+	msgReactivation7d = "🔥 Дарим тебе бесплатные генерации — вернись и попробуй"
+	msgReactivation15 = "⏳ Мы будем ждать тебя. Это последнее напоминание — загляни, когда будет удобно"
 )
 
 type Service struct {
@@ -151,7 +152,10 @@ func (s *Service) processLifecycleNotifications(ctx context.Context) error {
 	if err := s.processReactivation2d(ctx); err != nil {
 		return err
 	}
-	if err := s.processReactivation5d(ctx); err != nil {
+	if err := s.processReactivation7d(ctx); err != nil {
+		return err
+	}
+	if err := s.processReactivation15d(ctx); err != nil {
 		return err
 	}
 	return nil
@@ -270,7 +274,7 @@ LIMIT $1;
 	return nil
 }
 
-func (s *Service) processReactivation5d(ctx context.Context) error {
+func (s *Service) processReactivation7d(ctx context.Context) error {
 	const q = `
 SELECT
   u.id,
@@ -279,8 +283,8 @@ SELECT
 FROM users u
 LEFT JOIN user_notification_state ns ON ns.user_id = u.id
 WHERE u.is_banned = FALSE
-  AND now() >= u.updated_at + interval '5 days'
-  AND (ns.reactivation_5d_anchor IS NULL OR ns.reactivation_5d_anchor < u.updated_at)
+  AND now() >= u.updated_at + interval '7 days'
+  AND (ns.reactivation_7d_anchor IS NULL OR ns.reactivation_7d_anchor < u.updated_at)
 ORDER BY u.updated_at ASC, u.id ASC
 LIMIT $1;
 `
@@ -289,19 +293,53 @@ LIMIT $1;
 		return err
 	}
 	for _, u := range users {
-		claimed, claimErr := s.claimReactivation5d(ctx, u.UserID, u.Anchor)
+		claimed, claimErr := s.claimReactivation7d(ctx, u.UserID, u.Anchor)
 		if claimErr != nil {
-			log.Printf("notifier: claim reactivation 5d failed user_id=%d err=%v", u.UserID, claimErr)
+			log.Printf("notifier: claim reactivation 7d failed user_id=%d err=%v", u.UserID, claimErr)
 			continue
 		}
 		if !claimed {
 			continue
 		}
-		if err := s.grantReactivation5dGift(ctx, u.UserID, u.Anchor); err != nil {
-			log.Printf("notifier: grant reactivation gift failed user_id=%d err=%v", u.UserID, err)
+		if err := s.grantReactivation7dGift(ctx, u.UserID, u.Anchor); err != nil {
+			log.Printf("notifier: grant reactivation 7d gift failed user_id=%d err=%v", u.UserID, err)
 		}
-		if err := s.sendText(u.TgID, msgReactivation5d); err != nil {
-			log.Printf("notifier: send reactivation 5d failed user_id=%d tg_id=%d err=%v", u.UserID, u.TgID, err)
+		if err := s.sendText(u.TgID, msgReactivation7d); err != nil {
+			log.Printf("notifier: send reactivation 7d failed user_id=%d tg_id=%d err=%v", u.UserID, u.TgID, err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) processReactivation15d(ctx context.Context) error {
+	const q = `
+SELECT
+  u.id,
+  u.tg_id,
+  u.updated_at
+FROM users u
+LEFT JOIN user_notification_state ns ON ns.user_id = u.id
+WHERE u.is_banned = FALSE
+  AND now() >= u.updated_at + interval '15 days'
+  AND (ns.reactivation_15d_anchor IS NULL OR ns.reactivation_15d_anchor < u.updated_at)
+ORDER BY u.updated_at ASC, u.id ASC
+LIMIT $1;
+`
+	users, err := s.queryDueUsers(ctx, q, s.lifecycleBatchSize, true)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		claimed, claimErr := s.claimReactivation15d(ctx, u.UserID, u.Anchor)
+		if claimErr != nil {
+			log.Printf("notifier: claim reactivation 15d failed user_id=%d err=%v", u.UserID, claimErr)
+			continue
+		}
+		if !claimed {
+			continue
+		}
+		if err := s.sendText(u.TgID, msgReactivation15); err != nil {
+			log.Printf("notifier: send reactivation 15d failed user_id=%d tg_id=%d err=%v", u.UserID, u.TgID, err)
 		}
 	}
 	return nil
@@ -395,28 +433,42 @@ WHERE user_notification_state.reactivation_2d_anchor IS NULL
 	return tag.RowsAffected() > 0, err
 }
 
-func (s *Service) claimReactivation5d(ctx context.Context, userID int64, anchor time.Time) (bool, error) {
+func (s *Service) claimReactivation7d(ctx context.Context, userID int64, anchor time.Time) (bool, error) {
 	const q = `
-INSERT INTO user_notification_state (user_id, reactivation_5d_anchor, reactivation_5d_gift_anchor)
+INSERT INTO user_notification_state (user_id, reactivation_7d_anchor, reactivation_7d_gift_anchor)
 VALUES ($1, $2, $2)
 ON CONFLICT (user_id) DO UPDATE
-SET reactivation_5d_anchor = EXCLUDED.reactivation_5d_anchor,
-    reactivation_5d_gift_anchor = EXCLUDED.reactivation_5d_gift_anchor,
+SET reactivation_7d_anchor = EXCLUDED.reactivation_7d_anchor,
+    reactivation_7d_gift_anchor = EXCLUDED.reactivation_7d_gift_anchor,
     updated_at = now()
-WHERE user_notification_state.reactivation_5d_anchor IS NULL
-   OR user_notification_state.reactivation_5d_anchor < EXCLUDED.reactivation_5d_anchor;
+WHERE user_notification_state.reactivation_7d_anchor IS NULL
+   OR user_notification_state.reactivation_7d_anchor < EXCLUDED.reactivation_7d_anchor;
 `
 	tag, err := s.pg.Pool.Exec(ctx, q, userID, anchor.UTC())
 	return tag.RowsAffected() > 0, err
 }
 
-func (s *Service) grantReactivation5dGift(ctx context.Context, userID int64, anchor time.Time) error {
+func (s *Service) claimReactivation15d(ctx context.Context, userID int64, anchor time.Time) (bool, error) {
+	const q = `
+INSERT INTO user_notification_state (user_id, reactivation_15d_anchor)
+VALUES ($1, $2)
+ON CONFLICT (user_id) DO UPDATE
+SET reactivation_15d_anchor = EXCLUDED.reactivation_15d_anchor,
+    updated_at = now()
+WHERE user_notification_state.reactivation_15d_anchor IS NULL
+   OR user_notification_state.reactivation_15d_anchor < EXCLUDED.reactivation_15d_anchor;
+`
+	tag, err := s.pg.Pool.Exec(ctx, q, userID, anchor.UTC())
+	return tag.RowsAffected() > 0, err
+}
+
+func (s *Service) grantReactivation7dGift(ctx context.Context, userID int64, anchor time.Time) error {
 	meta := map[string]any{
-		"source": "notification.reactivation_5d",
+		"source": "notification.reactivation_7d",
 		"anchor": anchor.UTC().Format(time.RFC3339),
 	}
 	metaBytes, _ := json.Marshal(meta)
-	opKey := fmt.Sprintf("notifier:reactivation_5d:%d:%d", userID, anchor.UTC().Unix())
+	opKey := fmt.Sprintf("notifier:reactivation_7d:%d:%d", userID, anchor.UTC().Unix())
 
 	const q = `
 INSERT INTO credit_ledger (

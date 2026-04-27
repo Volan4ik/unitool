@@ -16,6 +16,7 @@ func MainReplyKeyboard() tgbotapi.ReplyKeyboardMarkup {
 	kb := tgbotapi.NewReplyKeyboard(row1, row2)
 	kb.ResizeKeyboard = true
 	kb.OneTimeKeyboard = false
+	kb.InputFieldPlaceholder = "Напиши промпт"
 	return kb
 }
 

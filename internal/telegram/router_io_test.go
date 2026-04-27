@@ -123,8 +123,8 @@ func TestSendStartGreeting(t *testing.T) {
 		if mock.callCount("sendAnimation") != 0 {
 			t.Fatalf("sendAnimation calls=%d want=0", mock.callCount("sendAnimation"))
 		}
-		if mock.callCount("sendMessage") != 1 {
-			t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
+		if mock.callCount("sendMessage") != 2 {
+			t.Fatalf("sendMessage calls=%d want=2", mock.callCount("sendMessage"))
 		}
 	})
 
@@ -144,8 +144,8 @@ func TestSendStartGreeting(t *testing.T) {
 		if mock.callCount("sendAnimation") != 1 {
 			t.Fatalf("sendAnimation calls=%d want=1", mock.callCount("sendAnimation"))
 		}
-		if mock.callCount("sendMessage") != 0 {
-			t.Fatalf("sendMessage calls=%d want=0", mock.callCount("sendMessage"))
+		if mock.callCount("sendMessage") != 1 {
+			t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
 		}
 	})
 
@@ -166,8 +166,8 @@ func TestSendStartGreeting(t *testing.T) {
 		if mock.callCount("sendAnimation") != 1 {
 			t.Fatalf("sendAnimation calls=%d want=1", mock.callCount("sendAnimation"))
 		}
-		if mock.callCount("sendMessage") != 1 {
-			t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
+		if mock.callCount("sendMessage") != 2 {
+			t.Fatalf("sendMessage calls=%d want=2", mock.callCount("sendMessage"))
 		}
 	})
 }

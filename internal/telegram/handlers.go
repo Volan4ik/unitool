@@ -187,7 +187,7 @@ func (r *Router) sendStartGreeting(m *tgbotapi.Message) error {
 		anim.ParseMode = tgbotapi.ModeHTML
 		anim.ReplyMarkup = WelcomeInlineKeyboard()
 		if _, err := r.Bot.API.Send(anim); err == nil {
-			return nil
+			return r.sendMainKeyboardPrompt(m.Chat.ID)
 		} else {
 			log.Printf("send start animation failed chat_id=%d err=%v", m.Chat.ID, err)
 		}
@@ -200,7 +200,14 @@ func (r *Router) sendStartGreeting(m *tgbotapi.Message) error {
 	if _, err := r.Bot.API.Send(greet); err != nil {
 		return err
 	}
-	return nil
+	return r.sendMainKeyboardPrompt(m.Chat.ID)
+}
+
+func (r *Router) sendMainKeyboardPrompt(chatID int64) error {
+	msg := tgbotapi.NewMessage(chatID, "Выберите действие")
+	msg.ReplyMarkup = MainReplyKeyboard()
+	_, err := r.Bot.API.Send(msg)
+	return err
 }
 
 func startAnimationFile(source string) tgbotapi.RequestFileData {
@@ -827,6 +834,13 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 			return nil
 		}
 		model := parts[2]
+		st, hasState, err := r.getState(ctx, u.ID)
+		if err != nil {
+			return err
+		}
+		if hasState && st.Mode == mode && st.Model == model {
+			return r.answerCallback(cq.ID, "Модель уже выбрана")
+		}
 		if _, ok := ResolveModel(mode, model); ok {
 			if err := r.setState(ctx, u.ID, UserState{Mode: mode, Model: model}); err != nil {
 				return err
