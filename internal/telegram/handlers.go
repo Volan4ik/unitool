@@ -67,6 +67,8 @@ type BroadcastScheduler interface {
 const (
 	tgMessageLimit     = 4096
 	tgEditPreviewLimit = 4000
+	imageMaxAttempts   = int32(1)
+	videoMaxAttempts   = int32(3)
 	defaultSourceTag   = "organic"
 	maxSourceTagLen    = 64
 	supportContact     = "@helpper"
@@ -706,7 +708,7 @@ func (r *Router) enqueueAsyncMediaPrompt(ctx context.Context, chatID, userID int
 		Provider:            providerName,
 		Model:               modelID,
 		Prompt:              txt,
-		Column9:             nil,
+		Column9:             asyncMaxAttempts(kind),
 	})
 	if err != nil {
 		r.failGenerationRequestWithLog(ctx, "async-generation", gr.ID, "failed_queue", err.Error(), pgtype.Int4{})
@@ -1307,6 +1309,13 @@ func (r *Router) allowGenerationRequest(chatID int64, kind string) bool {
 	}
 	_, _ = r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Сервис перегружен, попробуйте позже."))
 	return false
+}
+
+func asyncMaxAttempts(kind string) int32 {
+	if kind == "image" {
+		return imageMaxAttempts
+	}
+	return videoMaxAttempts
 }
 
 func (r *Router) isUserBanned(ctx context.Context, tgID int64) (bool, error) {
