@@ -11,8 +11,19 @@ import (
 
 const createPackage = `-- name: CreatePackage :one
 INSERT INTO packages (code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-RETURNING id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at
 `
 
 type CreatePackageParams struct {
@@ -68,7 +79,20 @@ func (q *Queries) DeletePackage(ctx context.Context, id int64) (int64, error) {
 }
 
 const getPackageByCode = `-- name: GetPackageByCode :one
-SELECT id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE code = $1
+SELECT
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at
+FROM packages
+WHERE code = $1
 `
 
 func (q *Queries) GetPackageByCode(ctx context.Context, code string) (Package, error) {
@@ -91,7 +115,20 @@ func (q *Queries) GetPackageByCode(ctx context.Context, code string) (Package, e
 }
 
 const getPackageByID = `-- name: GetPackageByID :one
-SELECT id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE id = $1
+SELECT
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at
+FROM packages
+WHERE id = $1
 `
 
 func (q *Queries) GetPackageByID(ctx context.Context, id int64) (Package, error) {
@@ -114,7 +151,21 @@ func (q *Queries) GetPackageByID(ctx context.Context, id int64) (Package, error)
 }
 
 const listActivePackages = `-- name: ListActivePackages :many
-SELECT id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages WHERE is_active = TRUE ORDER BY price_rub ASC
+SELECT
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at
+FROM packages
+WHERE is_active = TRUE
+ORDER BY price_rub ASC
 `
 
 func (q *Queries) ListActivePackages(ctx context.Context) ([]Package, error) {
@@ -150,7 +201,20 @@ func (q *Queries) ListActivePackages(ctx context.Context) ([]Package, error) {
 }
 
 const listPackages = `-- name: ListPackages :many
-SELECT id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at FROM packages ORDER BY id ASC
+SELECT
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at
+FROM packages
+ORDER BY id ASC
 `
 
 func (q *Queries) ListPackages(ctx context.Context) ([]Package, error) {
@@ -217,7 +281,18 @@ SET code = $2,
     is_active = $9,
     updated_at = now()
 WHERE id = $1
-RETURNING id, code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active, created_at, updated_at
+RETURNING
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at
 `
 
 type UpdatePackageParams struct {

@@ -13,11 +13,20 @@ import (
 
 const createOrder = `-- name: CreateOrder :one
 INSERT INTO orders (id, user_id, package_id, amount_rub, status, buyer_email, provider_data)
-VALUES ($1,$2,$3,$4,'created',$5,$6)
-RETURNING id, user_id, package_id, amount_rub, currency,
-          status::text AS status,
-          tg_payment_charge_id, provider_payment_charge_id,
-          buyer_email, provider_data, created_at, paid_at
+VALUES ($1, $2, $3, $4, 'created', $5, $6)
+RETURNING
+  id,
+  user_id,
+  package_id,
+  amount_rub,
+  currency,
+  status::text AS status,
+  tg_payment_charge_id,
+  provider_payment_charge_id,
+  buyer_email,
+  provider_data,
+  created_at,
+  paid_at
 `
 
 type CreateOrderParams struct {
@@ -72,11 +81,21 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (Creat
 }
 
 const getOrderByID = `-- name: GetOrderByID :one
-SELECT id, user_id, package_id, amount_rub, currency,
-       status::text AS status,
-       tg_payment_charge_id, provider_payment_charge_id,
-       buyer_email, provider_data, created_at, paid_at
-FROM orders WHERE id = $1
+SELECT
+  id,
+  user_id,
+  package_id,
+  amount_rub,
+  currency,
+  status::text AS status,
+  tg_payment_charge_id,
+  provider_payment_charge_id,
+  buyer_email,
+  provider_data,
+  created_at,
+  paid_at
+FROM orders
+WHERE id = $1
 `
 
 type GetOrderByIDRow struct {
@@ -116,9 +135,9 @@ func (q *Queries) GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByI
 
 const markOrderFailed = `-- name: MarkOrderFailed :execrows
 UPDATE orders
-SET status='failed'
-WHERE id=$1
-  AND status IN ('created','precheckout_ok')
+SET status = 'failed'
+WHERE id = $1
+  AND status IN ('created', 'precheckout_ok')
 `
 
 func (q *Queries) MarkOrderFailed(ctx context.Context, id pgtype.UUID) (int64, error) {
@@ -131,13 +150,13 @@ func (q *Queries) MarkOrderFailed(ctx context.Context, id pgtype.UUID) (int64, e
 
 const markOrderManualReview = `-- name: MarkOrderManualReview :execrows
 UPDATE orders
-SET status='manual_review',
+SET status = 'manual_review',
     paid_at = COALESCE(paid_at, now()),
     tg_payment_charge_id = COALESCE($2, tg_payment_charge_id),
     provider_payment_charge_id = COALESCE($3, provider_payment_charge_id),
     buyer_email = COALESCE($4, buyer_email)
-WHERE id=$1
-  AND status IN ('created','precheckout_ok')
+WHERE id = $1
+  AND status IN ('created', 'precheckout_ok')
 `
 
 type MarkOrderManualReviewParams struct {
@@ -162,12 +181,13 @@ func (q *Queries) MarkOrderManualReview(ctx context.Context, arg MarkOrderManual
 
 const markOrderPaid = `-- name: MarkOrderPaid :one
 UPDATE orders
-SET status='paid', paid_at=now(),
-    tg_payment_charge_id=$2,
-    provider_payment_charge_id=$3,
+SET status = 'paid',
+    paid_at = now(),
+    tg_payment_charge_id = $2,
+    provider_payment_charge_id = $3,
     buyer_email = COALESCE($4, buyer_email)
-WHERE id=$1
-  AND status IN ('created','precheckout_ok')
+WHERE id = $1
+  AND status IN ('created', 'precheckout_ok')
 RETURNING id
 `
 
@@ -192,10 +212,10 @@ func (q *Queries) MarkOrderPaid(ctx context.Context, arg MarkOrderPaidParams) (p
 
 const markOrderPrecheckout = `-- name: MarkOrderPrecheckout :execrows
 UPDATE orders
-SET status='precheckout_ok',
+SET status = 'precheckout_ok',
     buyer_email = COALESCE($2, buyer_email)
-WHERE id=$1
-  AND status='created'
+WHERE id = $1
+  AND status = 'created'
 `
 
 type MarkOrderPrecheckoutParams struct {

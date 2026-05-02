@@ -13,7 +13,12 @@ import (
 
 const beginUpdateProcessing = `-- name: BeginUpdateProcessing :execrows
 INSERT INTO telegram_updates (
-  update_id, status, attempt_count, processing_started_at, updated_at, last_error
+  update_id,
+  status,
+  attempt_count,
+  processing_started_at,
+  updated_at,
+  last_error
 )
 VALUES ($1, 'processing', 1, now(), now(), NULL)
 ON CONFLICT (update_id) DO UPDATE
@@ -43,7 +48,15 @@ func (q *Queries) BeginUpdateProcessing(ctx context.Context, arg BeginUpdateProc
 }
 
 const getTelegramUpdateByID = `-- name: GetTelegramUpdateByID :one
-SELECT update_id, status, attempt_count, processing_started_at, done_at, last_error, created_at, updated_at
+SELECT
+  update_id,
+  status,
+  attempt_count,
+  processing_started_at,
+  done_at,
+  last_error,
+  created_at,
+  updated_at
 FROM telegram_updates
 WHERE update_id = $1
 `

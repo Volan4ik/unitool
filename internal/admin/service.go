@@ -1,10 +1,13 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +47,12 @@ type Stats struct {
 	TotalGens  int64
 	TopUsers   []db.TopUsersByGenerationCountRow
 	BySource   []db.CountUsersBySourceTagRow
+}
+
+type UsersExport struct {
+	Filename string
+	Data     []byte
+	Rows     int
 }
 
 func NewService(q *db.Queries) *Service {
@@ -202,6 +211,25 @@ func (s *Service) GetStats(ctx context.Context, topN int32) (Stats, error) {
 	}, nil
 }
 
+func (s *Service) ExportUsersCSV(ctx context.Context, now time.Time) (UsersExport, error) {
+	rows, err := s.Q.ListUsersForExport(ctx)
+	if err != nil {
+		return UsersExport{}, err
+	}
+	data, err := buildUsersCSV(rows)
+	if err != nil {
+		return UsersExport{}, err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return UsersExport{
+		Filename: fmt.Sprintf("users_%s.csv", now.UTC().Format("20060102_150405")),
+		Data:     data,
+		Rows:     len(rows),
+	}, nil
+}
+
 func (s *Service) buildUserCard(ctx context.Context, u db.User) (UserCard, error) {
 	total, err := s.Q.CountGenerationRequestsByUser(ctx, u.ID)
 	if err != nil {
@@ -213,9 +241,9 @@ func (s *Service) buildUserCard(ctx context.Context, u db.User) (UserCard, error
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return UserCard{}, err
 	}
-	status := "active"
+	status := "активен"
 	if u.IsBanned {
-		status = "banned"
+		status = "забанен"
 	}
 	return UserCard{
 		User:           u,
@@ -223,6 +251,85 @@ func (s *Service) buildUserCard(ctx context.Context, u db.User) (UserCard, error
 		TotalGenerates: total,
 		LastPackage:    last,
 	}, nil
+}
+
+func buildUsersCSV(rows []db.ListUsersForExportRow) ([]byte, error) {
+	var buf bytes.Buffer
+	buf.WriteString("\xEF\xBB\xBF")
+
+	w := csv.NewWriter(&buf)
+	if err := w.Write([]string{
+		"id",
+		"telegram_id",
+		"username",
+		"first_name",
+		"last_name",
+		"language",
+		"is_banned",
+		"banned_at",
+		"banned_reason",
+		"text_balance",
+		"image_balance",
+		"video_balance",
+		"created_at",
+		"updated_at",
+		"source_tag",
+		"generation_count",
+		"paid_orders_count",
+		"paid_amount_rub",
+		"last_package_code",
+		"last_package_title",
+		"last_paid_at",
+	}); err != nil {
+		return nil, err
+	}
+
+	for _, r := range rows {
+		if err := w.Write([]string{
+			strconv.FormatInt(r.ID, 10),
+			strconv.FormatInt(r.TgID, 10),
+			csvText(r.Username),
+			csvText(r.FirstName),
+			csvText(r.LastName),
+			csvText(r.LangCode),
+			strconv.FormatBool(r.IsBanned),
+			csvTS(r.BannedAt),
+			csvText(r.BannedReason),
+			strconv.FormatInt(int64(r.TextBalance), 10),
+			strconv.FormatInt(int64(r.ImageBalance), 10),
+			strconv.FormatInt(int64(r.VideoBalance), 10),
+			csvTS(r.CreatedAt),
+			csvTS(r.UpdatedAt),
+			r.SourceTag,
+			strconv.FormatInt(r.GenerationCount, 10),
+			strconv.FormatInt(r.PaidOrdersCount, 10),
+			strconv.FormatInt(r.PaidAmountRub, 10),
+			csvText(r.LastPackageCode),
+			csvText(r.LastPackageTitle),
+			csvTS(r.LastPaidAt),
+		}); err != nil {
+			return nil, err
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func csvText(v pgtype.Text) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.String
+}
+
+func csvTS(v pgtype.Timestamptz) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.Time.UTC().Format(time.RFC3339)
 }
 
 func validatePackageInput(in PackageInput) (db.CreatePackageParams, error) {

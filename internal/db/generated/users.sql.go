@@ -120,7 +120,12 @@ func (q *Queries) CountUsersBySourceTag(ctx context.Context) ([]CountUsersBySour
 }
 
 const getBalancesByUserID = `-- name: GetBalancesByUserID :one
-SELECT text_balance, image_balance, video_balance FROM users WHERE id = $1
+SELECT
+  text_balance,
+  image_balance,
+  video_balance
+FROM users
+WHERE id = $1
 `
 
 type GetBalancesByUserIDRow struct {
@@ -232,6 +237,128 @@ func (q *Queries) GetUserByTGID(ctx context.Context, tgID int64) (User, error) {
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listUsersForExport = `-- name: ListUsersForExport :many
+WITH generation_counts AS (
+  SELECT user_id, COUNT(*)::bigint AS generation_count
+  FROM generation_requests
+  GROUP BY user_id
+),
+paid_orders AS (
+  SELECT
+    user_id,
+    COUNT(*)::bigint AS paid_orders_count,
+    COALESCE(SUM(amount_rub), 0)::bigint AS paid_amount_rub
+  FROM orders
+  WHERE status = 'paid'
+  GROUP BY user_id
+),
+last_paid AS (
+  SELECT DISTINCT ON (o.user_id)
+    o.user_id,
+    p.code AS last_package_code,
+    p.title AS last_package_title,
+    o.paid_at AS last_paid_at
+  FROM orders o
+  JOIN packages p ON p.id = o.package_id
+  WHERE o.status = 'paid'
+  ORDER BY o.user_id, o.paid_at DESC NULLS LAST, o.created_at DESC
+)
+SELECT
+  u.id,
+  u.tg_id,
+  u.username,
+  u.first_name,
+  u.last_name,
+  u.lang_code,
+  u.is_banned,
+  u.banned_at,
+  u.banned_reason,
+  u.text_balance,
+  u.image_balance,
+  u.video_balance,
+  u.created_at,
+  u.updated_at,
+  COALESCE(usa.source_tag, '')::text AS source_tag,
+  COALESCE(gc.generation_count, 0)::bigint AS generation_count,
+  COALESCE(po.paid_orders_count, 0)::bigint AS paid_orders_count,
+  COALESCE(po.paid_amount_rub, 0)::bigint AS paid_amount_rub,
+  lp.last_package_code,
+  lp.last_package_title,
+  lp.last_paid_at
+FROM users u
+LEFT JOIN user_start_attribution usa ON usa.user_id = u.id
+LEFT JOIN generation_counts gc ON gc.user_id = u.id
+LEFT JOIN paid_orders po ON po.user_id = u.id
+LEFT JOIN last_paid lp ON lp.user_id = u.id
+ORDER BY u.id ASC
+`
+
+type ListUsersForExportRow struct {
+	ID               int64              `json:"id"`
+	TgID             int64              `json:"tg_id"`
+	Username         pgtype.Text        `json:"username"`
+	FirstName        pgtype.Text        `json:"first_name"`
+	LastName         pgtype.Text        `json:"last_name"`
+	LangCode         pgtype.Text        `json:"lang_code"`
+	IsBanned         bool               `json:"is_banned"`
+	BannedAt         pgtype.Timestamptz `json:"banned_at"`
+	BannedReason     pgtype.Text        `json:"banned_reason"`
+	TextBalance      int32              `json:"text_balance"`
+	ImageBalance     int32              `json:"image_balance"`
+	VideoBalance     int32              `json:"video_balance"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	SourceTag        string             `json:"source_tag"`
+	GenerationCount  int64              `json:"generation_count"`
+	PaidOrdersCount  int64              `json:"paid_orders_count"`
+	PaidAmountRub    int64              `json:"paid_amount_rub"`
+	LastPackageCode  pgtype.Text        `json:"last_package_code"`
+	LastPackageTitle pgtype.Text        `json:"last_package_title"`
+	LastPaidAt       pgtype.Timestamptz `json:"last_paid_at"`
+}
+
+func (q *Queries) ListUsersForExport(ctx context.Context) ([]ListUsersForExportRow, error) {
+	rows, err := q.db.Query(ctx, listUsersForExport)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsersForExportRow
+	for rows.Next() {
+		var i ListUsersForExportRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TgID,
+			&i.Username,
+			&i.FirstName,
+			&i.LastName,
+			&i.LangCode,
+			&i.IsBanned,
+			&i.BannedAt,
+			&i.BannedReason,
+			&i.TextBalance,
+			&i.ImageBalance,
+			&i.VideoBalance,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SourceTag,
+			&i.GenerationCount,
+			&i.PaidOrdersCount,
+			&i.PaidAmountRub,
+			&i.LastPackageCode,
+			&i.LastPackageTitle,
+			&i.LastPaidAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const searchUsersByUsername = `-- name: SearchUsersByUsername :many
@@ -381,7 +508,7 @@ func (q *Queries) TrackUserStartAttribution(ctx context.Context, arg TrackUserSt
 
 const upsertUserByTGID = `-- name: UpsertUserByTGID :one
 INSERT INTO users (tg_id, username, first_name, last_name, lang_code)
-VALUES ($1,$2,$3,$4,$5)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (tg_id) DO UPDATE SET
     username = EXCLUDED.username,
     first_name = EXCLUDED.first_name,

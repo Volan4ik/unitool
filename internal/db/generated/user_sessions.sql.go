@@ -12,7 +12,11 @@ import (
 )
 
 const getUserSession = `-- name: GetUserSession :one
-SELECT mode, model FROM user_sessions WHERE user_id = $1
+SELECT
+  mode,
+  model
+FROM user_sessions
+WHERE user_id = $1
 `
 
 type GetUserSessionRow struct {

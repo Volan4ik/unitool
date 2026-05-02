@@ -1,19 +1,83 @@
 -- name: ListPackages :many
-SELECT * FROM packages ORDER BY id ASC;
+SELECT
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at
+FROM packages
+ORDER BY id ASC;
 
 -- name: ListActivePackages :many
-SELECT * FROM packages WHERE is_active = TRUE ORDER BY price_rub ASC;
+SELECT
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at
+FROM packages
+WHERE is_active = TRUE
+ORDER BY price_rub ASC;
 
 -- name: GetPackageByID :one
-SELECT * FROM packages WHERE id = $1;
+SELECT
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at
+FROM packages
+WHERE id = $1;
 
 -- name: GetPackageByCode :one
-SELECT * FROM packages WHERE code = $1;
+SELECT
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at
+FROM packages
+WHERE code = $1;
 
 -- name: CreatePackage :one
 INSERT INTO packages (code, title, price_rub, currency, text_credits, image_credits, video_credits, is_active)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-RETURNING *;
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at;
 
 -- name: UpdatePackage :one
 UPDATE packages
@@ -27,7 +91,18 @@ SET code = $2,
     is_active = $9,
     updated_at = now()
 WHERE id = $1
-RETURNING *;
+RETURNING
+  id,
+  code,
+  title,
+  price_rub,
+  currency,
+  text_credits,
+  image_credits,
+  video_credits,
+  is_active,
+  created_at,
+  updated_at;
 
 -- name: SetPackageActive :execrows
 UPDATE packages

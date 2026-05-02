@@ -33,7 +33,7 @@ func (r *Router) handleAdminCommand(ctx context.Context, m *tgbotapi.Message) er
 		return nil
 	}
 	r.clearAdminFlow(m.From.ID)
-	msg := tgbotapi.NewMessage(m.Chat.ID, "Admin panel")
+	msg := tgbotapi.NewMessage(m.Chat.ID, adminMainText())
 	msg.ReplyMarkup = AdminMainInlineKeyboard()
 	r.Bot.API.Send(msg)
 	return nil
@@ -56,7 +56,7 @@ func (r *Router) handleAdminCallback(ctx context.Context, cq *tgbotapi.CallbackQ
 		return nil
 	}
 	if len(parts) < 2 {
-		msg := tgbotapi.NewMessage(chatID, "Admin panel")
+		msg := tgbotapi.NewMessage(chatID, adminMainText())
 		msg.ReplyMarkup = AdminMainInlineKeyboard()
 		r.Bot.API.Send(msg)
 		return nil
@@ -65,12 +65,12 @@ func (r *Router) handleAdminCallback(ctx context.Context, cq *tgbotapi.CallbackQ
 	switch parts[1] {
 	case "menu":
 		r.clearAdminFlow(cq.From.ID)
-		msg := tgbotapi.NewMessage(chatID, "Admin panel")
+		msg := tgbotapi.NewMessage(chatID, adminMainText())
 		msg.ReplyMarkup = AdminMainInlineKeyboard()
 		r.Bot.API.Send(msg)
 	case "packages":
 		if len(parts) == 2 {
-			msg := tgbotapi.NewMessage(chatID, "Packages")
+			msg := tgbotapi.NewMessage(chatID, "Тарифы\n\nУправление платными пакетами: список, добавление, изменение и включение/выключение.")
 			msg.ReplyMarkup = AdminPackagesInlineKeyboard()
 			r.Bot.API.Send(msg)
 			return nil
@@ -78,17 +78,17 @@ func (r *Router) handleAdminCallback(ctx context.Context, cq *tgbotapi.CallbackQ
 		return r.handleAdminPackagesAction(ctx, cq.From.ID, chatID, parts[2:])
 	case "users":
 		if len(parts) == 2 {
-			msg := tgbotapi.NewMessage(chatID, "Users")
+			msg := tgbotapi.NewMessage(chatID, "Пользователи\n\nПоиск карточки пользователя и выгрузка всей базы в CSV.")
 			msg.ReplyMarkup = AdminUsersInlineKeyboard()
 			r.Bot.API.Send(msg)
 			return nil
 		}
-		return r.handleAdminUsersAction(cq.From.ID, chatID, parts[2:])
+		return r.handleAdminUsersAction(ctx, cq.From.ID, chatID, parts[2:])
 	case "stats":
 		return r.sendAdminStats(ctx, chatID)
 	case "ban":
 		if len(parts) == 2 {
-			msg := tgbotapi.NewMessage(chatID, "Ban / Unban")
+			msg := tgbotapi.NewMessage(chatID, "Бан / разбан\n\nБан блокирует генерации для выбранного Telegram ID.")
 			msg.ReplyMarkup = AdminBanInlineKeyboard()
 			r.Bot.API.Send(msg)
 			return nil
@@ -206,11 +206,11 @@ func (r *Router) handleAdminTextInput(ctx context.Context, m *tgbotapi.Message, 
 		}
 		lines := make([]string, 0, len(list))
 		for _, u := range list {
-			status := "active"
+			status := "активен"
 			if u.IsBanned {
-				status = "banned"
+				status = "забанен"
 			}
-			lines = append(lines, fmt.Sprintf("id=%d tg_id=%d username=%s status=%s", u.ID, u.TgID, textOrDash(u.Username.String, u.Username.Valid), status))
+			lines = append(lines, fmt.Sprintf("DB ID=%d, Telegram ID=%d, username=%s, статус=%s", u.ID, u.TgID, textOrDash(u.Username.String, u.Username.Valid), status))
 		}
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, strings.Join(lines, "\n")))
 		return true, nil
@@ -309,9 +309,9 @@ func (r *Router) handleAdminPackagesAction(ctx context.Context, adminTGID, chatI
 	return nil
 }
 
-func (r *Router) handleAdminUsersAction(adminTGID, chatID int64, parts []string) error {
+func (r *Router) handleAdminUsersAction(ctx context.Context, adminTGID, chatID int64, parts []string) error {
 	if len(parts) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "Users")
+		msg := tgbotapi.NewMessage(chatID, "Пользователи\n\nПоиск карточки пользователя и выгрузка всей базы в CSV.")
 		msg.ReplyMarkup = AdminUsersInlineKeyboard()
 		r.Bot.API.Send(msg)
 		return nil
@@ -323,6 +323,8 @@ func (r *Router) handleAdminUsersAction(adminTGID, chatID int64, parts []string)
 	case "find_username":
 		r.setAdminFlow(adminTGID, adminActionUserFindName)
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Введите username или его часть"))
+	case "export_csv":
+		return r.sendAdminUsersExport(ctx, chatID)
 	default:
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Неизвестное действие users."))
 	}
@@ -331,7 +333,7 @@ func (r *Router) handleAdminUsersAction(adminTGID, chatID int64, parts []string)
 
 func (r *Router) handleAdminBanAction(adminTGID, chatID int64, parts []string) error {
 	if len(parts) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "Ban / Unban")
+		msg := tgbotapi.NewMessage(chatID, "Бан / разбан\n\nБан блокирует генерации для выбранного Telegram ID.")
 		msg.ReplyMarkup = AdminBanInlineKeyboard()
 		r.Bot.API.Send(msg)
 		return nil
@@ -349,6 +351,23 @@ func (r *Router) handleAdminBanAction(adminTGID, chatID int64, parts []string) e
 	return nil
 }
 
+func (r *Router) sendAdminUsersExport(ctx context.Context, chatID int64) error {
+	export, err := r.Admin.ExportUsersCSV(ctx, time.Now().UTC())
+	if err != nil {
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка выгрузки пользователей: %v", err)))
+		return err
+	}
+	doc := tgbotapi.NewDocument(chatID, tgbotapi.FileBytes{
+		Name:  export.Filename,
+		Bytes: export.Data,
+	})
+	doc.Caption = fmt.Sprintf("Выгрузка пользователей: %d строк. Файл CSV открывается в Excel, Numbers и Google Sheets.", export.Rows)
+	if _, err := r.Bot.API.Send(doc); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (r *Router) sendAdminStats(ctx context.Context, chatID int64) error {
 	st, err := r.Admin.GetStats(ctx, adminTopUsersLimit)
 	if err != nil {
@@ -356,23 +375,25 @@ func (r *Router) sendAdminStats(ctx context.Context, chatID int64) error {
 		return err
 	}
 	lines := []string{
-		fmt.Sprintf("Users total: %d", st.TotalUsers),
-		fmt.Sprintf("Users active: %d", st.Active),
-		fmt.Sprintf("Users banned: %d", st.Banned),
-		fmt.Sprintf("New users 24h: %d", st.New24h),
-		fmt.Sprintf("New users 7d: %d", st.New7d),
-		fmt.Sprintf("Generations total: %d", st.TotalGens),
+		"Статистика",
+		"",
+		fmt.Sprintf("Всего пользователей: %d", st.TotalUsers),
+		fmt.Sprintf("Активных: %d", st.Active),
+		fmt.Sprintf("В бане: %d", st.Banned),
+		fmt.Sprintf("Новых за 24 часа: %d", st.New24h),
+		fmt.Sprintf("Новых за 7 дней: %d", st.New7d),
+		fmt.Sprintf("Всего генераций: %d", st.TotalGens),
 	}
 	if len(st.TopUsers) > 0 {
-		lines = append(lines, "Top users by generations:")
+		lines = append(lines, "", "Топ пользователей по генерациям:")
 		for i, u := range st.TopUsers {
-			lines = append(lines, fmt.Sprintf("%d) tg_id=%d username=%s gens=%d", i+1, u.TgID, textOrDash(u.Username.String, u.Username.Valid), u.GenCount))
+			lines = append(lines, fmt.Sprintf("%d. tg_id=%d, username=%s, генераций=%d", i+1, u.TgID, textOrDash(u.Username.String, u.Username.Valid), u.GenCount))
 		}
 	}
 	if len(st.BySource) > 0 {
-		lines = append(lines, "Users by source_tag:")
+		lines = append(lines, "", "Пользователи по источникам:")
 		for _, item := range st.BySource {
-			lines = append(lines, fmt.Sprintf("• %s: %d", item.SourceTag, item.UsersCount))
+			lines = append(lines, fmt.Sprintf("- %s: %d", item.SourceTag, item.UsersCount))
 		}
 	}
 	r.Bot.API.Send(tgbotapi.NewMessage(chatID, strings.Join(lines, "\n")))
@@ -483,9 +504,20 @@ func splitInput(raw string, max int) []string {
 	return out
 }
 
+func adminMainText() string {
+	return strings.Join([]string{
+		"Админ-панель",
+		"",
+		"Тарифы: список, добавление и изменение пакетов.",
+		"Пользователи: поиск, карточка и выгрузка CSV.",
+		"Статистика: пользователи, генерации и источники.",
+		"Рассылка: сообщение всем пользователям.",
+	}, "\n")
+}
+
 func formatPackage(p db.Package) string {
 	return fmt.Sprintf(
-		"id=%d code=%s name=%s price=%d %s image=%d video=%d active=%t created=%s updated=%s",
+		"id=%d, код=%s, название=%s\nцена=%d %s, фото=%d, видео=%d, активен=%t\nсоздан=%s, обновлён=%s",
 		p.ID,
 		p.Code,
 		p.Title,
@@ -502,14 +534,16 @@ func formatPackage(p db.Package) string {
 func formatUserCard(card admin.UserCard) string {
 	u := card.User
 	lines := []string{
-		fmt.Sprintf("user_id=%d", u.TgID),
-		fmt.Sprintf("db_id=%d", u.ID),
-		fmt.Sprintf("username=%s", textOrDash(u.Username.String, u.Username.Valid)),
-		fmt.Sprintf("status=%s", card.Status),
-		fmt.Sprintf("registered_at=%s", formatTS(u.CreatedAt.Time, u.CreatedAt.Valid)),
-		fmt.Sprintf("balance: image=%d video=%d", u.ImageBalance, u.VideoBalance),
-		fmt.Sprintf("last_package=%s", card.LastPackage),
-		fmt.Sprintf("total_generations=%d", card.TotalGenerates),
+		"Карточка пользователя",
+		"",
+		fmt.Sprintf("Telegram ID: %d", u.TgID),
+		fmt.Sprintf("DB ID: %d", u.ID),
+		fmt.Sprintf("Username: %s", textOrDash(u.Username.String, u.Username.Valid)),
+		fmt.Sprintf("Статус: %s", card.Status),
+		fmt.Sprintf("Регистрация: %s", formatTS(u.CreatedAt.Time, u.CreatedAt.Valid)),
+		fmt.Sprintf("Баланс: фото=%d, видео=%d", u.ImageBalance, u.VideoBalance),
+		fmt.Sprintf("Последний пакет: %s", card.LastPackage),
+		fmt.Sprintf("Всего генераций: %d", card.TotalGenerates),
 	}
 	return strings.Join(lines, "\n")
 }

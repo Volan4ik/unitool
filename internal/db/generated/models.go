@@ -8,6 +8,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type BroadcastCampaign struct {
+	ID            int64              `json:"id"`
+	CreatedByTgID int64              `json:"created_by_tg_id"`
+	MessageText   string             `json:"message_text"`
+	Status        string             `json:"status"`
+	LastUserID    int64              `json:"last_user_id"`
+	TotalUsers    int64              `json:"total_users"`
+	SentCount     int64              `json:"sent_count"`
+	FailedCount   int64              `json:"failed_count"`
+	ErrorMessage  pgtype.Text        `json:"error_message"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	StartedAt     pgtype.Timestamptz `json:"started_at"`
+	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ChatMessage struct {
 	ID                  int64              `json:"id"`
 	UserID              int64              `json:"user_id"`
@@ -140,6 +156,17 @@ type UserConversation struct {
 	ConversationID pgtype.UUID        `json:"conversation_id"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserNotificationState struct {
+	UserID                   int64              `json:"user_id"`
+	Onboarding1hSentAt       pgtype.Timestamptz `json:"onboarding_1h_sent_at"`
+	NoPurchase24hSentAt      pgtype.Timestamptz `json:"no_purchase_24h_sent_at"`
+	Reactivation2dAnchor     pgtype.Timestamptz `json:"reactivation_2d_anchor"`
+	Reactivation5dAnchor     pgtype.Timestamptz `json:"reactivation_5d_anchor"`
+	Reactivation5dGiftAnchor pgtype.Timestamptz `json:"reactivation_5d_gift_anchor"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
 }
 
 type UserSession struct {

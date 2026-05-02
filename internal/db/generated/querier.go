@@ -44,6 +44,7 @@ type Querier interface {
 	InsertGenerationRequest(ctx context.Context, arg InsertGenerationRequestParams) (InsertGenerationRequestRow, error)
 	ListActivePackages(ctx context.Context) ([]Package, error)
 	ListPackages(ctx context.Context) ([]Package, error)
+	ListUsersForExport(ctx context.Context) ([]ListUsersForExportRow, error)
 	MarkGenerationJobDone(ctx context.Context, arg MarkGenerationJobDoneParams) (int64, error)
 	MarkGenerationJobFailed(ctx context.Context, arg MarkGenerationJobFailedParams) (int64, error)
 	MarkOrderFailed(ctx context.Context, id pgtype.UUID) (int64, error)

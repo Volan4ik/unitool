@@ -7,7 +7,11 @@ SET mode = EXCLUDED.mode,
     updated_at = now();
 
 -- name: GetUserSession :one
-SELECT mode, model FROM user_sessions WHERE user_id = $1;
+SELECT
+  mode,
+  model
+FROM user_sessions
+WHERE user_id = $1;
 
 -- name: UpsertConversation :one
 INSERT INTO user_conversations (user_id, kind, conversation_id)

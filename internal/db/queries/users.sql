@@ -1,6 +1,6 @@
 -- name: UpsertUserByTGID :one
 INSERT INTO users (tg_id, username, first_name, last_name, lang_code)
-VALUES ($1,$2,$3,$4,$5)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (tg_id) DO UPDATE SET
     username = EXCLUDED.username,
     first_name = EXCLUDED.first_name,
@@ -21,7 +21,12 @@ FROM users
 WHERE tg_id = $1;
 
 -- name: GetBalancesByUserID :one
-SELECT text_balance, image_balance, video_balance FROM users WHERE id = $1;
+SELECT
+  text_balance,
+  image_balance,
+  video_balance
+FROM users
+WHERE id = $1;
 
 -- name: GetUserByID :one
 SELECT id, tg_id, username, first_name, last_name, lang_code,
@@ -40,6 +45,61 @@ FROM users
 WHERE username ILIKE $1
 ORDER BY id DESC
 LIMIT $2;
+
+-- name: ListUsersForExport :many
+WITH generation_counts AS (
+  SELECT user_id, COUNT(*)::bigint AS generation_count
+  FROM generation_requests
+  GROUP BY user_id
+),
+paid_orders AS (
+  SELECT
+    user_id,
+    COUNT(*)::bigint AS paid_orders_count,
+    COALESCE(SUM(amount_rub), 0)::bigint AS paid_amount_rub
+  FROM orders
+  WHERE status = 'paid'
+  GROUP BY user_id
+),
+last_paid AS (
+  SELECT DISTINCT ON (o.user_id)
+    o.user_id,
+    p.code AS last_package_code,
+    p.title AS last_package_title,
+    o.paid_at AS last_paid_at
+  FROM orders o
+  JOIN packages p ON p.id = o.package_id
+  WHERE o.status = 'paid'
+  ORDER BY o.user_id, o.paid_at DESC NULLS LAST, o.created_at DESC
+)
+SELECT
+  u.id,
+  u.tg_id,
+  u.username,
+  u.first_name,
+  u.last_name,
+  u.lang_code,
+  u.is_banned,
+  u.banned_at,
+  u.banned_reason,
+  u.text_balance,
+  u.image_balance,
+  u.video_balance,
+  u.created_at,
+  u.updated_at,
+  COALESCE(usa.source_tag, '')::text AS source_tag,
+  COALESCE(gc.generation_count, 0)::bigint AS generation_count,
+  COALESCE(po.paid_orders_count, 0)::bigint AS paid_orders_count,
+  COALESCE(po.paid_amount_rub, 0)::bigint AS paid_amount_rub,
+  lp.last_package_code,
+  lp.last_package_title,
+  lp.last_paid_at
+FROM users u
+LEFT JOIN user_start_attribution usa ON usa.user_id = u.id
+LEFT JOIN generation_counts gc ON gc.user_id = u.id
+LEFT JOIN paid_orders po ON po.user_id = u.id
+LEFT JOIN last_paid lp ON lp.user_id = u.id
+ORDER BY u.id ASC;
 
 -- name: SetUserBanStatus :execrows
 UPDATE users

@@ -116,15 +116,15 @@ func PackagesInlineKeyboard(items []PackageButton) tgbotapi.InlineKeyboardMarkup
 func AdminMainInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Packages", "admin:packages"),
-			tgbotapi.NewInlineKeyboardButtonData("Users", "admin:users"),
+			tgbotapi.NewInlineKeyboardButtonData("Тарифы", "admin:packages"),
+			tgbotapi.NewInlineKeyboardButtonData("Пользователи", "admin:users"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Stats", "admin:stats"),
-			tgbotapi.NewInlineKeyboardButtonData("Ban / Unban", "admin:ban"),
+			tgbotapi.NewInlineKeyboardButtonData("Статистика", "admin:stats"),
+			tgbotapi.NewInlineKeyboardButtonData("Бан / разбан", "admin:ban"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Broadcast", "admin:broadcast"),
+			tgbotapi.NewInlineKeyboardButtonData("Рассылка", "admin:broadcast"),
 		),
 	)
 }
@@ -132,19 +132,19 @@ func AdminMainInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 func AdminPackagesInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("List", "admin:packages:list"),
-			tgbotapi.NewInlineKeyboardButtonData("Add", "admin:packages:add"),
+			tgbotapi.NewInlineKeyboardButtonData("Список", "admin:packages:list"),
+			tgbotapi.NewInlineKeyboardButtonData("Добавить", "admin:packages:add"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Edit", "admin:packages:edit"),
-			tgbotapi.NewInlineKeyboardButtonData("Delete", "admin:packages:delete"),
+			tgbotapi.NewInlineKeyboardButtonData("Изменить", "admin:packages:edit"),
+			tgbotapi.NewInlineKeyboardButtonData("Удалить", "admin:packages:delete"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Activate", "admin:packages:activate"),
-			tgbotapi.NewInlineKeyboardButtonData("Deactivate", "admin:packages:deactivate"),
+			tgbotapi.NewInlineKeyboardButtonData("Включить", "admin:packages:activate"),
+			tgbotapi.NewInlineKeyboardButtonData("Выключить", "admin:packages:deactivate"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Back", "admin:menu"),
+			tgbotapi.NewInlineKeyboardButtonData("Назад", "admin:menu"),
 		),
 	)
 }
@@ -152,11 +152,14 @@ func AdminPackagesInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 func AdminUsersInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Find by user_id", "admin:users:find_id"),
-			tgbotapi.NewInlineKeyboardButtonData("Find by username", "admin:users:find_username"),
+			tgbotapi.NewInlineKeyboardButtonData("Найти по Telegram ID", "admin:users:find_id"),
+			tgbotapi.NewInlineKeyboardButtonData("Найти по username", "admin:users:find_username"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Back", "admin:menu"),
+			tgbotapi.NewInlineKeyboardButtonData("Скачать CSV", "admin:users:export_csv"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Назад", "admin:menu"),
 		),
 	)
 }
@@ -164,11 +167,11 @@ func AdminUsersInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 func AdminBanInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Ban", "admin:ban:set"),
-			tgbotapi.NewInlineKeyboardButtonData("Unban", "admin:ban:unset"),
+			tgbotapi.NewInlineKeyboardButtonData("Забанить", "admin:ban:set"),
+			tgbotapi.NewInlineKeyboardButtonData("Разбанить", "admin:ban:unset"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Back", "admin:menu"),
+			tgbotapi.NewInlineKeyboardButtonData("Назад", "admin:menu"),
 		),
 	)
 }
