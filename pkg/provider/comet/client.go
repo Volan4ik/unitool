@@ -881,12 +881,8 @@ func (c *Client) getKlingVideoStatus(ctx context.Context, createPath string, tas
 	if err := json.Unmarshal(b, &out); err != nil {
 		return klingVideoTaskEnvelope{}, fmt.Errorf("comet kling status invalid json (http %d): %s", resp.StatusCode, shorten(b, 200))
 	}
-	if !out.Code.IsSuccess() {
-		msg := strings.TrimSpace(out.Message)
-		if msg == "" {
-			msg = "unknown error"
-		}
-		return klingVideoTaskEnvelope{}, fmt.Errorf("comet kling status error: %s", msg)
+	if err := validateKlingStatusEnvelope(out, b); err != nil {
+		return klingVideoTaskEnvelope{}, err
 	}
 	status := strings.ToLower(klingTaskStatus(out))
 	if status == "succeed" || status == "succeeded" || status == "success" || status == "completed" || status == "done" {
@@ -916,6 +912,33 @@ func (c *Client) getKlingVideoStatus(ctx context.Context, createPath string, tas
 		}
 	}
 	return out, nil
+}
+
+func validateKlingStatusEnvelope(out klingVideoTaskEnvelope, body []byte) error {
+	code := strings.TrimSpace(string(out.Code))
+	if code == "" {
+		code = strings.TrimSpace(string(out.Data.Data.Code))
+	}
+	if code != "" && !klingResponseCode(code).IsSuccess() {
+		msg := firstNonEmpty(out.Message, out.Data.Data.Message)
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return fmt.Errorf("comet kling status error: %s", msg)
+	}
+	if code == "" && klingTaskStatus(out) == "" && firstKlingVideoURL(out) == "" && firstKlingImageURL(out) == "" {
+		return fmt.Errorf("comet kling status malformed response: %s", shorten(body, 200))
+	}
+	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func firstKlingVideoURL(out klingVideoTaskEnvelope) string {
