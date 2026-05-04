@@ -73,16 +73,22 @@ func TestOrderPublicPackages(t *testing.T) {
 	pkgs := []db.Package{
 		{Code: "custom_x"},
 		{Code: "boost_10_2"},
-		{Code: "golden_middle"},
-		{Code: "base_minimum"},
-		{Code: "luxury_maximum"},
+		{Code: "video_base_minimum"},
+		{Code: "photo_golden_middle"},
+		{Code: "photo_base_minimum"},
+		{Code: "video_luxury_maximum"},
+		{Code: "photo_luxury_maximum"},
+		{Code: "video_golden_middle"},
 		{Code: "custom_y"},
 	}
 	got := orderPublicPackages(pkgs)
 	wantCodes := []string{
-		"base_minimum",
-		"golden_middle",
-		"luxury_maximum",
+		"photo_base_minimum",
+		"photo_golden_middle",
+		"photo_luxury_maximum",
+		"video_base_minimum",
+		"video_golden_middle",
+		"video_luxury_maximum",
 		"boost_10_2",
 		"custom_x",
 		"custom_y",
@@ -102,10 +108,13 @@ func TestPackageButtonLabel(t *testing.T) {
 		code string
 		want string
 	}{
-		{code: "base_minimum", want: "Базовый минимум"},
-		{code: "golden_middle", want: "Золотая середина"},
-		{code: "luxury_maximum", want: "Роскошный максимум"},
-		{code: "boost_10_2", want: "Хочу буст!"},
+		{code: "photo_base_minimum", want: "Базовый минимум | Фото"},
+		{code: "photo_golden_middle", want: "Золотая середина | Фото"},
+		{code: "photo_luxury_maximum", want: "Роскошный максимум | Фото"},
+		{code: "video_base_minimum", want: "Базовый минимум | Видео"},
+		{code: "video_golden_middle", want: "Золотая середина | Видео"},
+		{code: "video_luxury_maximum", want: "Роскошный максимум | Видео"},
+		{code: "boost_10_2", want: "Буст: +10 фото и 2 видео"},
 		{code: "other", want: "Custom"},
 	}
 	for _, tc := range cases {
@@ -118,10 +127,13 @@ func TestPackageButtonLabel(t *testing.T) {
 
 func TestBuildPackagesMenuText(t *testing.T) {
 	text := buildPackagesMenuText()
-	if !strings.Contains(text, "<b>1. Базовый минимум: 690 руб</b>") {
+	if !strings.Contains(text, "<b>1. Базовый минимум: 99 руб</b>") {
 		t.Fatalf("unexpected text: %q", text)
 	}
-	if !strings.Contains(text, "буст") {
+	if !strings.Contains(text, "<b>1. Базовый минимум: 249 руб</b>") {
+		t.Fatalf("unexpected text: %q", text)
+	}
+	if !strings.Contains(text, "299 рублей") {
 		t.Fatalf("unexpected text: %q", text)
 	}
 }
@@ -130,11 +142,11 @@ func TestPackageKindHelpers(t *testing.T) {
 	if !isBoostPackage(db.Package{Code: " boost_10_2 "}) {
 		t.Fatal("expected boost package")
 	}
-	if isBoostPackage(db.Package{Code: "base_minimum"}) {
+	if isBoostPackage(db.Package{Code: "photo_base_minimum"}) {
 		t.Fatal("base package must not be boost")
 	}
 
-	if !isBasePackage(db.Package{Code: "base_minimum", ImageCredits: 1}) {
+	if !isBasePackage(db.Package{Code: "photo_base_minimum", ImageCredits: 1}) {
 		t.Fatal("expected base package")
 	}
 	if isBasePackage(db.Package{Code: "boost_10_2", ImageCredits: 10, VideoCredits: 2}) {

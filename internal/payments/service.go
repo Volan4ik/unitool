@@ -93,7 +93,7 @@ func (s *Service) SendInvoiceForPackage(ctx context.Context, chatID int64, userI
 	inv := tgbotapi.InvoiceConfig{
 		BaseChat:            tgbotapi.BaseChat{ChatID: chatID},
 		Title:               pkg.Title,
-		Description:         "Пакет попыток для нейросетей",
+		Description:         invoiceDescription(pkg),
 		Payload:             orderUUID.String(),
 		ProviderToken:       s.ProviderToken,
 		Currency:            "RUB",
@@ -440,6 +440,41 @@ func (s *Service) ensurePaymentAllowed(ctx context.Context, userID int64, pkg Pa
 
 func isBoostPackageCode(code string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(code)), "boost")
+}
+
+func invoiceDescription(pkg Package) string {
+	parts := make([]string, 0, 3)
+	if pkg.ImageCredits > 0 {
+		parts = append(parts, generationCreditLabel(pkg.ImageCredits, "фото"))
+	}
+	if pkg.VideoCredits > 0 {
+		parts = append(parts, generationCreditLabel(pkg.VideoCredits, "видео"))
+	}
+	if len(parts) == 0 && pkg.TextCredits > 0 {
+		parts = append(parts, fmt.Sprintf("%d текстовых генераций", pkg.TextCredits))
+	}
+	if len(parts) == 0 {
+		return "Доступ ко всем моделям"
+	}
+	if isBoostPackageCode(pkg.Code) {
+		return "Буст подписки: +" + strings.Join(parts, " и ")
+	}
+	return "Доступ ко всем моделям. " + strings.Join(parts, " и ")
+}
+
+func generationCreditLabel(count int, kind string) string {
+	form := "генераций"
+	mod100 := count % 100
+	mod10 := count % 10
+	if mod100 < 11 || mod100 > 14 {
+		switch mod10 {
+		case 1:
+			form = "генерация"
+		case 2, 3, 4:
+			form = "генерации"
+		}
+	}
+	return fmt.Sprintf("%d %s-%s", count, kind, form)
 }
 
 func boostRestrictionMessage() string {

@@ -1038,7 +1038,15 @@ func orderPublicPackages(pkgs []db.Package) []db.Package {
 	for _, p := range pkgs {
 		byCode[p.Code] = p
 	}
-	order := []string{"base_minimum", "golden_middle", "luxury_maximum", "boost_10_2"}
+	order := []string{
+		"photo_base_minimum",
+		"photo_golden_middle",
+		"photo_luxury_maximum",
+		"video_base_minimum",
+		"video_golden_middle",
+		"video_luxury_maximum",
+		"boost_10_2",
+	}
 	out := make([]db.Package, 0, len(pkgs))
 	used := make(map[string]struct{}, len(order))
 	for _, code := range order {
@@ -1058,14 +1066,20 @@ func orderPublicPackages(pkgs []db.Package) []db.Package {
 
 func packageButtonLabel(p db.Package) string {
 	switch p.Code {
-	case "base_minimum":
-		return "Базовый минимум"
-	case "golden_middle":
-		return "Золотая середина"
-	case "luxury_maximum":
-		return "Роскошный максимум"
+	case "photo_base_minimum":
+		return "Базовый минимум | Фото"
+	case "photo_golden_middle":
+		return "Золотая середина | Фото"
+	case "photo_luxury_maximum":
+		return "Роскошный максимум | Фото"
+	case "video_base_minimum":
+		return "Базовый минимум | Видео"
+	case "video_golden_middle":
+		return "Золотая середина | Видео"
+	case "video_luxury_maximum":
+		return "Роскошный максимум | Видео"
 	case "boost_10_2":
-		return "Хочу буст!"
+		return "Буст: +10 фото и 2 видео"
 	default:
 		return p.Title
 	}
@@ -1073,22 +1087,37 @@ func packageButtonLabel(p db.Package) string {
 
 func buildPackagesMenuText() string {
 	return strings.Join([]string{
-		"<b>Виберите один из пакетов</b>",
+		"<b>Выберите один из пакетов:</b>",
 		"",
-		"<b>1. Базовый минимум: 690 руб</b>",
+		"<b>Пакеты фото-генераций:</b>",
+		"",
+		"<b>1. Базовый минимум: 99 руб</b>",
 		"- Доступ ко всем моделям",
-		"- 30 генераций фотографий ",
-		"- 5 видео генераций",
+		"- 5 фото-генераций",
 		"",
-		"<b>2. Золотая середина: 1490 руб</b>",
-		"- 100 фото генераций",
-		"- 10 видео генераций",
+		"<b>2. Золотая середина: 199 руб</b>",
+		"- Доступ ко всем моделям",
+		"- 15 фото-генераций",
 		"",
-		"<b>3. Роскошный максимум 3190 руб</b>",
-		"- 200 фото генераций",
-		"- 25 видео генераций",
+		"<b>3. Роскошный максимум: 499 руб</b>",
+		"- Доступ ко всем моделям",
+		"- 40 фото-генераций",
 		"",
-		"<i>В любой момент можете добавить буст вашей подписки: + 10 фото и 2 видео генераций - 290 рублей</i>",
+		"<b>Пакеты видео-генераций:</b>",
+		"",
+		"<b>1. Базовый минимум: 249 руб</b>",
+		"- Доступ ко всем моделям",
+		"- 3 видео-генерации",
+		"",
+		"<b>2. Золотая середина: 599 руб</b>",
+		"- Доступ ко всем моделям",
+		"- 9 видео-генераций",
+		"",
+		"<b>3. Роскошный максимум: 1199 руб</b>",
+		"- Доступ ко всем моделям",
+		"- 15 видео-генераций",
+		"",
+		"<i>В любой момент можете добавить буст вашей подписки: + 10 фото и 2 видео генераций - 299 рублей</i>",
 	}, "\n")
 }
 

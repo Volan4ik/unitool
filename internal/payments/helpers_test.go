@@ -19,6 +19,37 @@ func TestIsBoostPackageCode(t *testing.T) {
 	}
 }
 
+func TestInvoiceDescription(t *testing.T) {
+	cases := []struct {
+		name string
+		pkg  Package
+		want string
+	}{
+		{
+			name: "photo package",
+			pkg:  Package{Code: "photo_base_minimum", ImageCredits: 5},
+			want: "Доступ ко всем моделям. 5 фото-генераций",
+		},
+		{
+			name: "video package",
+			pkg:  Package{Code: "video_golden_middle", VideoCredits: 9},
+			want: "Доступ ко всем моделям. 9 видео-генераций",
+		},
+		{
+			name: "boost package",
+			pkg:  Package{Code: "boost_10_2", ImageCredits: 10, VideoCredits: 2},
+			want: "Буст подписки: +10 фото-генераций и 2 видео-генерации",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := invoiceDescription(tc.pkg); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildProviderDataReceipt(t *testing.T) {
 	raw := buildProviderDataReceipt("Plan", 690, "user@example.com")
 	var pd providerData
