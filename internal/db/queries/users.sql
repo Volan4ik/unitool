@@ -50,6 +50,7 @@ LIMIT $2;
 WITH generation_counts AS (
   SELECT user_id, COUNT(*)::bigint AS generation_count
   FROM generation_requests
+  WHERE status = 'ok'
   GROUP BY user_id
 ),
 paid_orders AS (
