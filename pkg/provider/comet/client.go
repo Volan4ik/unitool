@@ -484,10 +484,19 @@ func (c klingResponseCode) IsSuccess() bool {
 }
 
 type klingVideoTaskEnvelope struct {
-	Code      klingResponseCode `json:"code"`
-	Message   string            `json:"message"`
-	RequestID string            `json:"request_id"`
-	Data      struct {
+	Code          klingResponseCode `json:"code"`
+	Message       string            `json:"message"`
+	RequestID     string            `json:"request_id"`
+	TaskID        string            `json:"task_id"`
+	TaskStatus    string            `json:"task_status"`
+	Status        string            `json:"status"`
+	TaskStatusMsg string            `json:"task_status_msg"`
+	FailReason    string            `json:"fail_reason"`
+	ResultURL     string            `json:"result_url"`
+	TaskResult    klingTaskResult   `json:"task_result"`
+	CreatedAt     int64             `json:"created_at"`
+	UpdatedAt     int64             `json:"updated_at"`
+	Data          struct {
 		TaskID        string          `json:"task_id"`
 		TaskStatus    string          `json:"task_status"`
 		Status        string          `json:"status"`
@@ -524,6 +533,12 @@ type klingVideoTaskEnvelope struct {
 }
 
 func klingTaskStatus(out klingVideoTaskEnvelope) string {
+	if status := strings.TrimSpace(out.TaskStatus); status != "" {
+		return status
+	}
+	if status := strings.TrimSpace(out.Status); status != "" {
+		return status
+	}
 	if status := strings.TrimSpace(out.Data.TaskStatus); status != "" {
 		return status
 	}
@@ -540,6 +555,12 @@ func klingTaskStatus(out klingVideoTaskEnvelope) string {
 }
 
 func klingTaskFailureReason(out klingVideoTaskEnvelope) string {
+	if msg := strings.TrimSpace(out.TaskStatusMsg); msg != "" {
+		return msg
+	}
+	if msg := strings.TrimSpace(out.FailReason); msg != "" {
+		return msg
+	}
 	if msg := strings.TrimSpace(out.Data.TaskStatusMsg); msg != "" {
 		return msg
 	}
@@ -795,14 +816,14 @@ func (c *Client) createKlingVideoTask(ctx context.Context, path string, payload 
 				if err := json.Unmarshal(b, &out); err != nil {
 					return "", fmt.Errorf("comet kling create invalid json (http %d): %s", resp.StatusCode, shorten(b, 200))
 				}
-				if !out.Code.IsSuccess() {
+				if code := strings.TrimSpace(string(out.Code)); code != "" && !out.Code.IsSuccess() {
 					msg := strings.TrimSpace(out.Message)
 					if msg == "" {
 						msg = "unknown error"
 					}
 					return "", fmt.Errorf("comet kling create error: %s", msg)
 				}
-				taskID := strings.TrimSpace(out.Data.TaskID)
+				taskID := klingTaskID(out)
 				if taskID == "" {
 					return "", fmt.Errorf("comet kling create response missing task_id: %s", shorten(b, 200))
 				}
@@ -932,6 +953,19 @@ func validateKlingStatusEnvelope(out klingVideoTaskEnvelope, body []byte) error 
 	return nil
 }
 
+func klingTaskID(out klingVideoTaskEnvelope) string {
+	if id := strings.TrimSpace(out.TaskID); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(out.Data.TaskID); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(out.Data.Data.TaskID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(out.Data.Data.Data.TaskID)
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if value = strings.TrimSpace(value); value != "" {
@@ -942,6 +976,17 @@ func firstNonEmpty(values ...string) string {
 }
 
 func firstKlingVideoURL(out klingVideoTaskEnvelope) string {
+	for _, item := range out.TaskResult.Videos {
+		if url := strings.TrimSpace(item.URL); url != "" {
+			return url
+		}
+	}
+	if url := strings.TrimSpace(out.ResultURL); url != "" {
+		return url
+	}
+	if url := strings.TrimSpace(out.TaskResult.URL); url != "" {
+		return url
+	}
 	for _, item := range out.Data.TaskResult.Videos {
 		if url := strings.TrimSpace(item.URL); url != "" {
 			return url
@@ -976,6 +1021,20 @@ func firstKlingVideoURL(out klingVideoTaskEnvelope) string {
 }
 
 func firstKlingImageURL(out klingVideoTaskEnvelope) string {
+	for _, item := range out.TaskResult.Images {
+		if url := strings.TrimSpace(item.URL); url != "" {
+			return url
+		}
+	}
+	if url := strings.TrimSpace(out.ResultURL); url != "" {
+		return url
+	}
+	if url := strings.TrimSpace(out.TaskResult.URL); url != "" {
+		return url
+	}
+	if url := strings.TrimSpace(out.TaskResult.Image); url != "" {
+		return url
+	}
 	for _, item := range out.Data.TaskResult.Images {
 		if url := strings.TrimSpace(item.URL); url != "" {
 			return url

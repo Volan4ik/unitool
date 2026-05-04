@@ -150,6 +150,15 @@ func TestBuildModelsMenuText(t *testing.T) {
 	}
 }
 
+func TestAsyncMaxAttempts(t *testing.T) {
+	if got := asyncMaxAttempts("image"); got != 1 {
+		t.Fatalf("image attempts=%d want=1", got)
+	}
+	if got := asyncMaxAttempts("video"); got != 1 {
+		t.Fatalf("video attempts=%d want=1", got)
+	}
+}
+
 func TestPackageKindHelpers(t *testing.T) {
 	if !isBoostPackage(db.Package{Code: " boost_10_2 "}) {
 		t.Fatal("expected boost package")

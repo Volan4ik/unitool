@@ -3,6 +3,7 @@ package comet
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"testing"
@@ -90,11 +91,11 @@ func TestGetKlingVideoStatusAllowsInProgressWithoutTopLevelCode(t *testing.T) {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		body := []byte(`{
-			"data": {
-				"task_id": "task-1",
-				"task_status": "processing",
-				"updated_at": 1773380633979
-			}
+			"task_id": "task-1",
+			"task_info": {},
+			"created_at": 1777935055866,
+			"updated_at": 1777935055866,
+			"task_status": "submitted"
 		}`)
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -108,8 +109,36 @@ func TestGetKlingVideoStatusAllowsInProgressWithoutTopLevelCode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err=%v", err)
 	}
-	if status := klingTaskStatus(got); status != "processing" {
+	if status := klingTaskStatus(got); status != "submitted" {
 		t.Fatalf("unexpected status: %q", status)
+	}
+}
+
+func TestKlingFlatResponseHelpers(t *testing.T) {
+	var out klingVideoTaskEnvelope
+	raw := []byte(`{
+		"task_id": "task-1",
+		"task_status": "succeed",
+		"task_result": {
+			"videos": [
+				{"url": "https://example.com/video.mp4"}
+			]
+		}
+	}`)
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got := klingTaskID(out); got != "task-1" {
+		t.Fatalf("unexpected task id: %q", got)
+	}
+	if got := klingTaskStatus(out); got != "succeed" {
+		t.Fatalf("unexpected status: %q", got)
+	}
+	if got := firstKlingVideoURL(out); got != "https://example.com/video.mp4" {
+		t.Fatalf("unexpected video url: %q", got)
+	}
+	if err := validateKlingStatusEnvelope(out, raw); err != nil {
+		t.Fatalf("unexpected validation err=%v", err)
 	}
 }
 

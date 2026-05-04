@@ -68,7 +68,7 @@ const (
 	tgMessageLimit     = 4096
 	tgEditPreviewLimit = 4000
 	imageMaxAttempts   = int32(1)
-	videoMaxAttempts   = int32(3)
+	videoMaxAttempts   = int32(1)
 	defaultSourceTag   = "organic"
 	maxSourceTagLen    = 64
 	supportContact     = "@helpper"
