@@ -952,13 +952,32 @@ func isModeChooserMessage(msg *tgbotapi.Message) bool {
 
 func (r *Router) sendModelsMenu(chatID int64, mode, selected string) error {
 	kb := ModelsInlineKeyboard(mode, selected)
-	msg := tgbotapi.NewMessage(chatID, "<b>Выберите модель, а затем напишите, что хотите сгенерировать</b>")
+	msg := tgbotapi.NewMessage(chatID, buildModelsMenuText(mode))
 	msg.ParseMode = tgbotapi.ModeHTML
 	msg.ReplyMarkup = kb
 	if _, err := r.Bot.API.Send(msg); err != nil {
 		return err
 	}
 	return nil
+}
+
+func buildModelsMenuText(mode string) string {
+	lines := []string{"<b>Выберите модель, а затем напишите, что хотите сгенерировать</b>"}
+	if quote := modelReferenceLimitsQuote(mode); quote != "" {
+		lines = append(lines, "", "<blockquote>"+quote+"</blockquote>")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func modelReferenceLimitsQuote(mode string) string {
+	switch mode {
+	case "video":
+		return "Референсы для видео: Sora 2 и Veo 3 — 1 фото; Kling — до 4 фото. Если отправить больше, будут использованы первые фото в рамках лимита."
+	case "image":
+		return "Референсы для фото: можно отправить несколько изображений; итоговая поддержка зависит от выбранной модели."
+	default:
+		return ""
+	}
 }
 
 func (r *Router) showProfile(ctx context.Context, chatID, userID int64) error {

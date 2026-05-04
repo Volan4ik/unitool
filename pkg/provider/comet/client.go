@@ -65,8 +65,7 @@ func (c *Client) Generate(ctx context.Context, req provider.ModelRequest) (provi
 	case "image":
 		return c.generateImage(ctx, model, req.Input, inputReferencesFromParams(req.Params))
 	case "video":
-		inputReference, _ := req.Params["input_reference"].(string)
-		return c.generateVideo(ctx, model, req.Input, inputReference)
+		return c.generateVideo(ctx, model, req.Input, inputReferencesFromParams(req.Params))
 	default:
 		return provider.ModelResponse{}, fmt.Errorf("unsupported kind: %s", kind)
 	}
@@ -420,10 +419,15 @@ type vidStatusResp struct {
 }
 
 type klingVideoCreateReq struct {
-	Prompt    string `json:"prompt,omitempty"`
-	Image     string `json:"image,omitempty"`
-	ModelName string `json:"model_name,omitempty"`
-	Duration  string `json:"duration,omitempty"`
+	Prompt    string                 `json:"prompt,omitempty"`
+	Image     string                 `json:"image,omitempty"`
+	ImageList []klingVideoImageEntry `json:"image_list,omitempty"`
+	ModelName string                 `json:"model_name,omitempty"`
+	Duration  string                 `json:"duration,omitempty"`
+}
+
+type klingVideoImageEntry struct {
+	Image string `json:"image,omitempty"`
 }
 
 type klingTaskAsset struct {
@@ -566,15 +570,19 @@ func isSupportedVideoModel(model string) bool {
 	}
 }
 
-func (c *Client) generateVideo(ctx context.Context, model string, prompt string, inputReference string) (provider.ModelResponse, error) {
+func (c *Client) generateVideo(ctx context.Context, model string, prompt string, inputReferences []string) (provider.ModelResponse, error) {
 	model = normalizeVideoModel(model)
 	if !isSupportedVideoModel(model) {
 		return provider.ModelResponse{}, fmt.Errorf("unsupported video model %q for Comet video generation (supported: sora-2, kling-v1, kling-v1-6, veo3)", model)
 	}
 	if isKlingVideoModel(model) {
-		return c.generateKlingVideo(ctx, model, prompt, inputReference)
+		return c.generateKlingVideo(ctx, model, prompt, inputReferences)
 	}
 
+	inputReference := ""
+	if len(inputReferences) > 0 {
+		inputReference = inputReferences[0]
+	}
 	videoID, err := c.createVideoTask(ctx, model, prompt, inputReference)
 	if err != nil {
 		return provider.ModelResponse{}, err
@@ -667,17 +675,8 @@ func canUseGeminiGenerateContent(refs []string) bool {
 	return true
 }
 
-func (c *Client) generateKlingVideo(ctx context.Context, model string, prompt string, inputReference string) (provider.ModelResponse, error) {
-	path := "/kling/v1/videos/text2video"
-	payload := klingVideoCreateReq{
-		Prompt:    prompt,
-		ModelName: model,
-		Duration:  "5",
-	}
-	if ref := normalizeKlingImageInput(inputReference); ref != "" {
-		path = "/kling/v1/videos/image2video"
-		payload.Image = ref
-	}
+func (c *Client) generateKlingVideo(ctx context.Context, model string, prompt string, inputReferences []string) (provider.ModelResponse, error) {
+	path, payload := buildKlingVideoRequest(model, prompt, inputReferences)
 
 	task, err := c.createKlingVideoTask(ctx, path, payload)
 	if err != nil {
@@ -702,6 +701,41 @@ func (c *Client) generateKlingVideo(ctx context.Context, model string, prompt st
 			"source":     path,
 		},
 	}, nil
+}
+
+func buildKlingVideoRequest(model string, prompt string, inputReferences []string) (string, klingVideoCreateReq) {
+	refs := normalizeKlingVideoReferences(inputReferences)
+	payload := klingVideoCreateReq{
+		Prompt:    prompt,
+		ModelName: model,
+		Duration:  "5",
+	}
+	switch len(refs) {
+	case 0:
+		return "/kling/v1/videos/text2video", payload
+	case 1:
+		payload.Image = refs[0]
+		return "/kling/v1/videos/image2video", payload
+	default:
+		payload.ImageList = make([]klingVideoImageEntry, 0, len(refs))
+		for _, ref := range refs {
+			payload.ImageList = append(payload.ImageList, klingVideoImageEntry{Image: ref})
+		}
+		return "/kling/v1/videos/multi-image2video", payload
+	}
+}
+
+func normalizeKlingVideoReferences(inputReferences []string) []string {
+	refs := make([]string, 0, len(inputReferences))
+	for _, inputReference := range inputReferences {
+		if ref := normalizeKlingImageInput(inputReference); ref != "" {
+			refs = append(refs, ref)
+			if len(refs) == 4 {
+				break
+			}
+		}
+	}
+	return refs
 }
 
 func normalizeKlingImageInput(inputReference string) string {

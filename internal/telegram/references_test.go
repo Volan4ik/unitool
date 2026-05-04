@@ -49,6 +49,29 @@ func TestBuildPromptWithReferences(t *testing.T) {
 	}
 }
 
+func TestReferenceFileIDsForModeModel(t *testing.T) {
+	t.Run("image keeps all references", func(t *testing.T) {
+		refs, warning := referenceFileIDsForModeModel("image", "kling-v2", []string{"a", "b"})
+		if warning != "" || len(refs) != 2 {
+			t.Fatalf("unexpected refs=%v warning=%q", refs, warning)
+		}
+	})
+
+	t.Run("sora video keeps first reference", func(t *testing.T) {
+		refs, warning := referenceFileIDsForModeModel("video", "sora-2", []string{"a", "b"})
+		if len(refs) != 1 || refs[0] != "a" || warning == "" {
+			t.Fatalf("unexpected refs=%v warning=%q", refs, warning)
+		}
+	})
+
+	t.Run("kling video keeps up to four references", func(t *testing.T) {
+		refs, warning := referenceFileIDsForModeModel("video", "kling-v1-6", []string{"a", "b", "c", "d", "e"})
+		if len(refs) != 4 || refs[0] != "a" || refs[3] != "d" || warning == "" {
+			t.Fatalf("unexpected refs=%v warning=%q", refs, warning)
+		}
+	})
+}
+
 func TestPromptWithoutReferenceLines(t *testing.T) {
 	raw := strings.Join([]string{
 		"input_reference=data:image/png;base64,AAA",

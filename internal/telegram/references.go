@@ -14,6 +14,11 @@ import (
 
 var mediaGroupSettleDelay = 1200 * time.Millisecond
 
+const (
+	maxSingleReferenceVideoImages = 1
+	maxKlingVideoReferenceImages  = 4
+)
+
 var encodeReferenceDataURI = buildReferenceDataURIs
 
 type pendingMediaGroup struct {
@@ -143,6 +148,12 @@ func (r *Router) processReferencePrompt(ctx context.Context, chatID, userID int6
 		_, _ = r.Bot.API.Send(msg)
 		return nil
 	}
+	fileIDs, warning := referenceFileIDsForModeModel(st.Mode, modelID, fileIDs)
+	if warning != "" {
+		msg := tgbotapi.NewMessage(chatID, warning)
+		msg.ReplyMarkup = MainReplyKeyboard()
+		_, _ = r.Bot.API.Send(msg)
+	}
 
 	dataURIs, err := encodeReferenceDataURI(ctx, r.Bot.API, fileIDs)
 	if err != nil {
@@ -154,6 +165,27 @@ func (r *Router) processReferencePrompt(ctx context.Context, chatID, userID int6
 
 	enrichedPrompt := buildPromptWithReferences(prompt, dataURIs)
 	return r.enqueueAsyncMediaPrompt(ctx, chatID, userID, st.Mode, modelID, enrichedPrompt)
+}
+
+func referenceFileIDsForModeModel(mode string, modelID string, fileIDs []string) ([]string, string) {
+	if mode != "video" {
+		return fileIDs, ""
+	}
+	limit := maxSingleReferenceVideoImages
+	if isKlingVideoProviderModel(modelID) {
+		limit = maxKlingVideoReferenceImages
+	}
+	if len(fileIDs) <= limit {
+		return fileIDs, ""
+	}
+	if isKlingVideoProviderModel(modelID) {
+		return fileIDs[:limit], "Kling поддерживает до 4 фото-референсов для видео. Использую первые 4 фото из отправленных."
+	}
+	return fileIDs[:limit], "Sora 2 и Veo 3 поддерживают только одно фото-референс для видео. Использую первое фото из отправленных."
+}
+
+func isKlingVideoProviderModel(modelID string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelID)), "kling-")
 }
 
 func (r *Router) appendPendingReferences(userID int64, fileIDs []string) {

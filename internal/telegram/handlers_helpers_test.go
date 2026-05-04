@@ -138,6 +138,18 @@ func TestBuildPackagesMenuText(t *testing.T) {
 	}
 }
 
+func TestBuildModelsMenuText(t *testing.T) {
+	videoText := buildModelsMenuText("video")
+	if !strings.Contains(videoText, "<blockquote>") || !strings.Contains(videoText, "Kling") || !strings.Contains(videoText, "до 4 фото") {
+		t.Fatalf("unexpected video model menu text: %q", videoText)
+	}
+
+	textText := buildModelsMenuText("text")
+	if strings.Contains(textText, "<blockquote>") {
+		t.Fatalf("text model menu must not include reference quote: %q", textText)
+	}
+}
+
 func TestPackageKindHelpers(t *testing.T) {
 	if !isBoostPackage(db.Package{Code: " boost_10_2 "}) {
 		t.Fatal("expected boost package")
