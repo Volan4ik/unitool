@@ -9,11 +9,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bot ./cmd/bot
 
 FROM alpine:3.21
-WORKDIR /
-RUN adduser -D -H -u 65532 nonroot
+WORKDIR /app
+RUN adduser -D -H -u 65532 nonroot \
+    && mkdir -p /var/log/unitool \
+    && chown -R nonroot:nonroot /var/log/unitool /app
 COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=build /etc/ssl/certs /etc/ssl/certs
 COPY --from=build /bot /bot
-ENV TZ=UTC
+ENV TZ=UTC \
+    LOG_FILE_PATH=/var/log/unitool/bot.log
 USER nonroot:nonroot
 ENTRYPOINT ["/bot"]

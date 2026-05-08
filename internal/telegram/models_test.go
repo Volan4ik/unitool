@@ -7,7 +7,7 @@ import (
 
 func TestModelUIListByModeAndFallback(t *testing.T) {
 	image := ModelUIList("image")
-	wantImage := []string{"GPT 4o Image", "Nano Banana", "Kling"}
+	wantImage := []string{"GPT Image 2", "Nano Banana", "Kling"}
 	if !reflect.DeepEqual(image, wantImage) {
 		t.Fatalf("image list mismatch: got=%v want=%v", image, wantImage)
 	}
@@ -25,7 +25,7 @@ func TestDefaultModelUI(t *testing.T) {
 		want string
 	}{
 		{mode: "text", want: "GPT-5 Nano"},
-		{mode: "image", want: "GPT 4o Image"},
+		{mode: "image", want: "GPT Image 2"},
 		{mode: "video", want: "Sora 2"},
 		{mode: "unknown", want: "GPT-5 Nano"},
 	}
@@ -42,7 +42,12 @@ func TestDefaultModelUI(t *testing.T) {
 }
 
 func TestResolveModel(t *testing.T) {
-	got, ok := ResolveModel("image", "Nano Banana")
+	got, ok := ResolveModel("image", "GPT Image 2")
+	if !ok || got != "gpt-image-2" {
+		t.Fatalf("resolve default image model failed: ok=%v got=%q", ok, got)
+	}
+
+	got, ok = ResolveModel("image", "Nano Banana")
 	if !ok || got != "gemini-3.1-flash-image-preview" {
 		t.Fatalf("resolve image model failed: ok=%v got=%q", ok, got)
 	}

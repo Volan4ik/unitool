@@ -18,7 +18,11 @@ services:
     environment:
       # Override DB connection for compose network
       - DATABASE_URL=postgres://bot:bot@db:5432/bot?sslmode=disable
+      - LOG_FILE_PATH=/var/log/unitool/bot.log
+    volumes:
+      - botlogs:/var/log/unitool
     ports: ["8080:8080"]
     depends_on: [db]
 volumes:
   pgdata: {}
+  botlogs: {}

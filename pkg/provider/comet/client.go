@@ -54,13 +54,13 @@ func (c *Client) Generate(ctx context.Context, req provider.ModelRequest) (provi
 	if kind == "" {
 		kind = "text"
 	}
-	model := req.Model
-	if model == "" {
-		model = "gpt-4o"
-	}
+	model := strings.TrimSpace(req.Model)
 
 	switch kind {
 	case "text":
+		if model == "" {
+			model = "gpt-4o"
+		}
 		return c.generateChat(ctx, model, req.History, req.Input)
 	case "image":
 		return c.generateImage(ctx, model, req.Input, inputReferencesFromParams(req.Params))
@@ -295,15 +295,28 @@ func (c *Client) generateChat(ctx context.Context, model string, history []provi
 
 // OpenAI-ish images API (best-effort, non-stream)
 type imgReq struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Size   string `json:"size,omitempty"`
+	Model        string `json:"model"`
+	Prompt       string `json:"prompt"`
+	N            int    `json:"n,omitempty"`
+	Quality      string `json:"quality,omitempty"`
+	Size         string `json:"size,omitempty"`
+	OutputFormat string `json:"output_format,omitempty"`
 }
 type imgResp struct {
-	Created int64 `json:"created"`
-	Data    []struct {
-		URL string `json:"url"`
+	Created      int64  `json:"created"`
+	OutputFormat string `json:"output_format"`
+	Usage        struct {
+		TotalTokens int `json:"total_tokens"`
+	} `json:"usage"`
+	Data []struct {
+		URL     string `json:"url"`
+		B64JSON string `json:"b64_json"`
 	} `json:"data"`
+}
+
+type imageEditFile struct {
+	Blob     []byte
+	FileName string
 }
 
 type klingImageCreateReq struct {
@@ -368,7 +381,7 @@ type geminiGenerateContentResp struct {
 
 func (c *Client) generateImage(ctx context.Context, model string, prompt string, refs []string) (provider.ModelResponse, error) {
 	if model == "" {
-		model = "gpt-4o-image"
+		model = "gpt-image-2"
 	}
 	if isKlingImageModel(model) {
 		return c.generateKlingImage(ctx, model, prompt, refs)
@@ -379,11 +392,14 @@ func (c *Client) generateImage(ctx context.Context, model string, prompt string,
 		}
 		return c.generateImageViaChat(ctx, model, prompt, refs)
 	}
+	if len(refs) > 0 && isGPTImageModel(model) {
+		return c.generateImageViaEditsEndpoint(ctx, model, prompt, refs)
+	}
 	if len(refs) > 0 {
 		return c.generateImageViaChat(ctx, model, prompt, refs)
 	}
-	// Comet /v1/images/generations accepts imagen-family models.
-	// Non-imagen models are routed through chat-compatible image generation.
+	// Comet /v1/images/generations accepts GPT image and imagen-family models.
+	// Other models are routed through chat-compatible image generation.
 	if shouldUseImagesEndpoint(model) {
 		return c.generateImageViaImagesEndpoint(ctx, model, prompt)
 	}
@@ -675,7 +691,11 @@ func isKlingVideoModel(model string) bool {
 
 func shouldUseImagesEndpoint(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
-	return strings.HasPrefix(m, "imagen")
+	return strings.HasPrefix(m, "imagen") || isGPTImageModel(m)
+}
+
+func isGPTImageModel(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-image-")
 }
 
 func isKlingImageModel(model string) bool {
@@ -1381,18 +1401,119 @@ func (c *Client) generateImageViaGemini(ctx context.Context, model string, promp
 
 func (c *Client) generateImageViaImagesEndpoint(ctx context.Context, model string, prompt string) (provider.ModelResponse, error) {
 	payload := imgReq{Model: model, Prompt: prompt}
+	if isGPTImageModel(model) {
+		payload.N = 1
+		payload.Quality = "low"
+		payload.Size = "1024x1024"
+		payload.OutputFormat = "jpeg"
+	}
 	var out imgResp
 	if err := c.postJSON(ctx, "/v1/images/generations", payload, &out); err != nil {
 		return provider.ModelResponse{}, err
 	}
-	if len(out.Data) == 0 || strings.TrimSpace(out.Data[0].URL) == "" {
-		return provider.ModelResponse{}, errors.New("no image url returned")
+	if len(out.Data) == 0 {
+		return provider.ModelResponse{}, errors.New("no image returned")
+	}
+	output := strings.TrimSpace(out.Data[0].URL)
+	source := "images/generations"
+	if output == "" {
+		if b64 := strings.TrimSpace(out.Data[0].B64JSON); b64 != "" {
+			format := strings.TrimSpace(out.OutputFormat)
+			if format == "" {
+				format = strings.TrimSpace(payload.OutputFormat)
+			}
+			output = imageDataURI(format, b64)
+			source = "images/generations:b64_json"
+		}
+	}
+	if output == "" {
+		return provider.ModelResponse{}, errors.New("no image payload returned")
 	}
 	return provider.ModelResponse{
-		Output: strings.TrimSpace(out.Data[0].URL),
-		Tokens: 0,
-		Meta:   map[string]any{"model": model, "source": "images/generations"},
+		Output: output,
+		Tokens: out.Usage.TotalTokens,
+		Meta:   map[string]any{"model": model, "source": source},
 	}, nil
+}
+
+func (c *Client) generateImageViaEditsEndpoint(ctx context.Context, model string, prompt string, refs []string) (provider.ModelResponse, error) {
+	files := make([]imageEditFile, 0, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		blob, fileName, ok := decodeDataImageURI(ref)
+		if !ok {
+			return provider.ModelResponse{}, errors.New("gpt image edit reference must be a data image URI")
+		}
+		files = append(files, imageEditFile{Blob: blob, FileName: fileName})
+	}
+	if len(files) == 0 {
+		return provider.ModelResponse{}, errors.New("gpt image edit requires at least one reference image")
+	}
+
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("model", model)
+	_ = w.WriteField("prompt", prompt)
+	_ = w.WriteField("n", "1")
+	_ = w.WriteField("quality", "low")
+	_ = w.WriteField("size", "1024x1024")
+	_ = w.WriteField("output_format", "jpeg")
+	for _, file := range files {
+		part, err := w.CreateFormFile("image", file.FileName)
+		if err != nil {
+			return provider.ModelResponse{}, err
+		}
+		if _, err := part.Write(file.Blob); err != nil {
+			return provider.ModelResponse{}, err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return provider.ModelResponse{}, err
+	}
+
+	var out imgResp
+	if err := c.postMultipart(ctx, "/v1/images/edits", body.Bytes(), w.FormDataContentType(), &out); err != nil {
+		return provider.ModelResponse{}, err
+	}
+	if len(out.Data) == 0 {
+		return provider.ModelResponse{}, errors.New("no edited image returned")
+	}
+	output := strings.TrimSpace(out.Data[0].URL)
+	source := "images/edits"
+	if output == "" {
+		if b64 := strings.TrimSpace(out.Data[0].B64JSON); b64 != "" {
+			format := strings.TrimSpace(out.OutputFormat)
+			if format == "" {
+				format = "jpeg"
+			}
+			output = imageDataURI(format, b64)
+			source = "images/edits:b64_json"
+		}
+	}
+	if output == "" {
+		return provider.ModelResponse{}, errors.New("no edited image payload returned")
+	}
+	return provider.ModelResponse{
+		Output: output,
+		Tokens: out.Usage.TotalTokens,
+		Meta:   map[string]any{"model": model, "source": source, "references": len(files)},
+	}, nil
+}
+
+func imageDataURI(format string, b64 string) string {
+	format = strings.ToLower(strings.TrimSpace(format))
+	switch format {
+	case "jpg":
+		format = "jpeg"
+	case "jpeg", "png", "webp":
+	default:
+		format = "png"
+	}
+	b64 = strings.NewReplacer("\n", "", "\r", "", "\t", "", " ", "").Replace(strings.TrimSpace(b64))
+	return fmt.Sprintf("data:image/%s;base64,%s", format, b64)
 }
 
 func (c *Client) generateImageViaChat(ctx context.Context, model string, prompt string, refs []string) (provider.ModelResponse, error) {
@@ -1883,6 +2004,81 @@ func (c *Client) postJSON(ctx context.Context, path string, payload any, out any
 	return errors.New("comet request failed")
 }
 
+func (c *Client) postMultipart(ctx context.Context, path string, body []byte, contentType string, out any) error {
+	if c.key == "" {
+		return errors.New("comet api key is empty")
+	}
+	attempts := 3
+	var lastErr error
+	start := time.Now()
+	retries := 0
+	for attempt := 0; attempt < attempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.key)
+		req.Header.Set("Content-Type", contentType)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := c.httpc.Do(req)
+		if err != nil {
+			lastErr = err
+			retries++
+		} else {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				if out != nil && len(b) > 0 {
+					if err := json.Unmarshal(b, out); err != nil {
+						return fmt.Errorf("comet invalid json response (http %d): %v; body: %s", resp.StatusCode, err, shorten(b, 200))
+					}
+				}
+				durMs := float64(time.Since(start).Milliseconds())
+				metrics.CometRequests.WithLabelValues(labelFor(path), "ok", "200").Inc()
+				metrics.CometLatencyMs.WithLabelValues(labelFor(path), "ok").Observe(durMs)
+				if retries > 0 {
+					metrics.CometRetries.WithLabelValues(labelFor(path)).Add(float64(retries))
+				}
+				return nil
+			}
+			if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+				lastErr = fmt.Errorf("comet http %d: %s", resp.StatusCode, shorten(b, 200))
+				wait := c.computeBackoff(attempt, resp.Header.Get("Retry-After"))
+				if !c.sleepContext(ctx, wait) {
+					return ctx.Err()
+				}
+				retries++
+				continue
+			}
+			durMs := float64(time.Since(start).Milliseconds())
+			metrics.CometRequests.WithLabelValues(labelFor(path), "error", fmt.Sprintf("%d", resp.StatusCode)).Inc()
+			metrics.CometLatencyMs.WithLabelValues(labelFor(path), "error").Observe(durMs)
+			if retries > 0 {
+				metrics.CometRetries.WithLabelValues(labelFor(path)).Add(float64(retries))
+			}
+			return fmt.Errorf("comet http %d: %s", resp.StatusCode, shorten(b, 200))
+		}
+		wait := c.computeBackoff(attempt, "")
+		if !c.sleepContext(ctx, wait) {
+			return ctx.Err()
+		}
+	}
+	if lastErr != nil {
+		durMs := float64(time.Since(start).Milliseconds())
+		metrics.CometRequests.WithLabelValues(labelFor(path), "error", "neterr").Inc()
+		metrics.CometLatencyMs.WithLabelValues(labelFor(path), "error").Observe(durMs)
+		if retries > 0 {
+			metrics.CometRetries.WithLabelValues(labelFor(path)).Add(float64(retries))
+		}
+		return lastErr
+	}
+	return errors.New("comet request failed")
+}
+
 func (c *Client) computeBackoff(attempt int, retryAfter string) time.Duration {
 	// Respect Retry-After seconds if present
 	if retryAfter != "" {
@@ -1972,9 +2168,13 @@ func decodeDataImageURI(raw string) ([]byte, string, bool) {
 		return nil, "", false
 	}
 	payload := raw[comma+1:]
+	payload = strings.NewReplacer("\n", "", "\r", "", "\t", "", " ", "").Replace(strings.TrimSpace(payload))
 	blob, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
-		return nil, "", false
+		blob, err = base64.RawStdEncoding.DecodeString(payload)
+		if err != nil {
+			return nil, "", false
+		}
 	}
 	fileName := "reference.jpg"
 	switch {

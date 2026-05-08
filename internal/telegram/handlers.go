@@ -64,6 +64,11 @@ type BroadcastScheduler interface {
 	EnqueueBroadcast(ctx context.Context, createdByTGID int64, text string) (int64, error)
 }
 
+type submitAsyncGenerationResult struct {
+	Request db.GenerationRequest
+	Created bool
+}
+
 const (
 	tgMessageLimit     = 4096
 	tgEditPreviewLimit = 4000
@@ -76,6 +81,7 @@ const (
 )
 
 var errEmptyModelResponse = errors.New("empty model response")
+var errAsyncGenerationQueueFailed = errors.New("async generation queue failed")
 
 func NewRouter(
 	b *Bot,
@@ -655,71 +661,36 @@ func (r *Router) enqueueAsyncMediaPrompt(ctx context.Context, chatID, userID int
 	}
 
 	updateID := updateIDFromContext(ctx)
-	gr, created, err := r.getOrCreateGenerationRequest(ctx, db.InsertGenerationRequestParams{
-		UserID:   userID,
-		UpdateID: toInt8(updateID),
-		Column3:  kind,
-		Provider: providerName,
-		Model:    modelID,
-		Column6:  "queued",
-	}, updateID)
+	submitted, err := r.submitAsyncGeneration(ctx, submitAsyncGenerationParams{
+		ChatID:         chatID,
+		UserID:         userID,
+		ConversationID: convID,
+		UpdateID:       updateID,
+		Kind:           kind,
+		Provider:       providerName,
+		Model:          modelID,
+		CleanPrompt:    cleanPrompt,
+		RawPrompt:      txt,
+		MaxAttempts:    asyncMaxAttempts(kind),
+	})
 	if err != nil {
+		if isInsufficientCreditError(err) {
+			r.sendInsufficientCreditsMessage(chatID, kind)
+			return nil
+		}
+		if errors.Is(err, errAsyncGenerationQueueFailed) {
+			log.Printf("async-generation: queue failed without committed spend user_id=%d chat_id=%d kind=%s model=%s err=%v", userID, chatID, kind, modelID, err)
+			r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Не удалось поставить задачу в очередь. Попытка не списана, попробуйте позже."))
+			return nil
+		}
+		log.Printf("async-generation: atomic submit failed user_id=%d chat_id=%d kind=%s model=%s err=%v", userID, chatID, kind, modelID, err)
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Внутренняя ошибка. Попробуйте позже."))
 		return err
 	}
+	gr := submitted.Request
+	created := submitted.Created
 	if !created && isTerminalGenerationRequestStatus(generationRequestStatus(gr.Status)) {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Этот запрос уже обработан. Отправьте новый промпт."))
-		return nil
-	}
-
-	if created {
-		if _, err := r.Q.InsertChatMessage(ctx, db.InsertChatMessageParams{
-			UserID:              userID,
-			ConversationID:      pgtype.UUID{Bytes: convID, Valid: true},
-			Kind:                kind,
-			Role:                "user",
-			ContentText:         pgtype.Text{String: cleanPrompt, Valid: cleanPrompt != ""},
-			AttachmentUrl:       pgtype.Text{},
-			Provider:            pgtype.Text{String: providerName, Valid: true},
-			Model:               pgtype.Text{String: modelID, Valid: true},
-			InputTokens:         pgtype.Int4{},
-			OutputTokens:        pgtype.Int4{},
-			GenerationRequestID: pgtype.Int8{Int64: gr.ID, Valid: true},
-		}); err != nil {
-			r.failGenerationRequestWithLog(ctx, "async-generation", gr.ID, "failed", "insert user message failed", pgtype.Int4{})
-			r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Не удалось сохранить промпт. Попробуйте позже."))
-			return nil
-		}
-	}
-
-	chargeMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "async_generation"})
-	if err := r.chargeOneCredit(ctx, userID, kind, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, kind)); err != nil {
-		r.failGenerationRequestWithLog(ctx, "async-generation", gr.ID, "failed_balance", err.Error(), pgtype.Int4{})
-		r.sendInsufficientCreditsMessage(chatID, kind)
-		return nil
-	}
-
-	_, err = r.Q.EnqueueGenerationJob(ctx, db.EnqueueGenerationJobParams{
-		GenerationRequestID: gr.ID,
-		UserID:              userID,
-		ChatID:              chatID,
-		ConversationID:      pgtype.UUID{Bytes: convID, Valid: true},
-		Kind:                kind,
-		Provider:            providerName,
-		Model:               modelID,
-		Prompt:              txt,
-		Column9:             asyncMaxAttempts(kind),
-	})
-	if err != nil {
-		r.failGenerationRequestWithLog(ctx, "async-generation", gr.ID, "failed_queue", err.Error(), pgtype.Int4{})
-		refundMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "queue_failed"})
-		refundErr := r.refundOneCredit(ctx, userID, kind, refundMeta, fmt.Sprintf("refund:gen:%d:%s", gr.ID, kind))
-		msg := "Не удалось поставить задачу в очередь. Попытка возвращена."
-		if refundErr != nil {
-			log.Printf("async-generation: refund failed gen_id=%d user_id=%d kind=%s source=queue_failed err=%v reconcile_required=true", gr.ID, userID, kind, refundErr)
-			msg = "Не удалось поставить задачу в очередь. Возврат попытки в обработке, попробуйте позже."
-		}
-		r.Bot.API.Send(tgbotapi.NewMessage(chatID, msg))
 		return nil
 	}
 
@@ -729,6 +700,119 @@ func (r *Router) enqueueAsyncMediaPrompt(ctx context.Context, chatID, userID int
 	}
 	r.Bot.API.Send(tgbotapi.NewMessage(chatID, ack))
 	return nil
+}
+
+type submitAsyncGenerationParams struct {
+	ChatID         int64
+	UserID         int64
+	ConversationID uuid.UUID
+	UpdateID       int64
+	Kind           string
+	Provider       string
+	Model          string
+	CleanPrompt    string
+	RawPrompt      string
+	MaxAttempts    int32
+}
+
+func (r *Router) submitAsyncGeneration(ctx context.Context, p submitAsyncGenerationParams) (submitAsyncGenerationResult, error) {
+	tx, err := r.Q.BeginTx(ctx)
+	if err != nil {
+		return submitAsyncGenerationResult{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	qtx := r.Q.WithTx(tx)
+	gr, created, err := r.getOrCreateGenerationRequestWithQueries(ctx, qtx, db.InsertGenerationRequestParams{
+		UserID:   p.UserID,
+		UpdateID: toInt8(p.UpdateID),
+		Column3:  p.Kind,
+		Provider: p.Provider,
+		Model:    p.Model,
+		Column6:  "queued",
+	}, p.UpdateID)
+	if err != nil {
+		return submitAsyncGenerationResult{}, err
+	}
+	result := submitAsyncGenerationResult{Request: gr, Created: created}
+	if !created && isTerminalGenerationRequestStatus(generationRequestStatus(gr.Status)) {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			return submitAsyncGenerationResult{}, err
+		}
+		committed = true
+		return result, nil
+	}
+
+	if created {
+		if _, err := qtx.InsertChatMessage(ctx, db.InsertChatMessageParams{
+			UserID:              p.UserID,
+			ConversationID:      pgtype.UUID{Bytes: p.ConversationID, Valid: true},
+			Kind:                p.Kind,
+			Role:                "user",
+			ContentText:         pgtype.Text{String: p.CleanPrompt, Valid: p.CleanPrompt != ""},
+			AttachmentUrl:       pgtype.Text{},
+			Provider:            pgtype.Text{String: p.Provider, Valid: true},
+			Model:               pgtype.Text{String: p.Model, Valid: true},
+			InputTokens:         pgtype.Int4{},
+			OutputTokens:        pgtype.Int4{},
+			GenerationRequestID: pgtype.Int8{Int64: gr.ID, Valid: true},
+		}); err != nil {
+			return submitAsyncGenerationResult{}, err
+		}
+	}
+
+	chargeMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "async_generation"})
+	spendTx, err := tx.Begin(ctx)
+	if err != nil {
+		return submitAsyncGenerationResult{}, err
+	}
+	spendQ := r.Q.WithTx(spendTx)
+	err = r.chargeOneCreditWithQueries(ctx, spendQ, p.UserID, p.Kind, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, p.Kind))
+	if err != nil {
+		if rbErr := spendTx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			return submitAsyncGenerationResult{}, rbErr
+		}
+		if _, failErr := qtx.FailGenerationRequest(ctx, db.FailGenerationRequestParams{
+			ID:           gr.ID,
+			Column2:      "failed_balance",
+			ErrorMessage: pgtype.Text{String: err.Error(), Valid: true},
+			LatencyMs:    pgtype.Int4{},
+		}); failErr != nil {
+			return submitAsyncGenerationResult{}, failErr
+		}
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return submitAsyncGenerationResult{}, commitErr
+		}
+		committed = true
+		return result, err
+	}
+	if err := spendTx.Commit(ctx); err != nil {
+		return submitAsyncGenerationResult{}, err
+	}
+
+	if _, err := qtx.EnqueueGenerationJob(ctx, db.EnqueueGenerationJobParams{
+		GenerationRequestID: gr.ID,
+		UserID:              p.UserID,
+		ChatID:              p.ChatID,
+		ConversationID:      pgtype.UUID{Bytes: p.ConversationID, Valid: true},
+		Kind:                p.Kind,
+		Provider:            p.Provider,
+		Model:               p.Model,
+		Prompt:              p.RawPrompt,
+		Column9:             p.MaxAttempts,
+	}); err != nil {
+		return submitAsyncGenerationResult{}, fmt.Errorf("%w: %v", errAsyncGenerationQueueFailed, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return submitAsyncGenerationResult{}, err
+	}
+	committed = true
+	return result, nil
 }
 
 func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery) error {
@@ -972,9 +1056,9 @@ func buildModelsMenuText(mode string) string {
 func modelReferenceLimitsQuote(mode string) string {
 	switch mode {
 	case "video":
-		return "Референсы для видео: Sora 2 и Veo 3 — 1 фото; Kling — до 4 фото. Если отправить больше, будут использованы первые фото в рамках лимита."
+		return "Вы можете отправить референсы для генерации видео одним сообщением с описанием: Sora 2 и Veo 3 — 1 фото; Kling — до 4 фото. Если отправить больше, будут использованы первые фото в рамках лимита."
 	case "image":
-		return "Референсы для фото: можно отправить несколько изображений; итоговая поддержка зависит от выбранной модели."
+		return "Вы можете отправить референсы для генерации фото одним сообщением с описанием."
 	default:
 		return ""
 	}
@@ -1187,13 +1271,17 @@ func (r *Router) getState(ctx context.Context, userID int64) (UserState, bool, e
 }
 
 func (r *Router) chargeOneCredit(ctx context.Context, userID int64, kind string, meta []byte, opKey string) error {
+	return r.chargeOneCreditWithQueries(ctx, r.Q, userID, kind, meta, opKey)
+}
+
+func (r *Router) chargeOneCreditWithQueries(ctx context.Context, q db.Querier, userID int64, kind string, meta []byte, opKey string) error {
 	switch kind {
 	case "text":
-		return r.Q.SpendText(ctx, db.SpendTextParams{UserID: userID, Meta: meta, OpKey: pgtype.Text{String: opKey, Valid: true}})
+		return q.SpendText(ctx, db.SpendTextParams{UserID: userID, Meta: meta, OpKey: pgtype.Text{String: opKey, Valid: true}})
 	case "image":
-		return r.Q.SpendImage(ctx, db.SpendImageParams{UserID: userID, Meta: meta, OpKey: pgtype.Text{String: opKey, Valid: true}})
+		return q.SpendImage(ctx, db.SpendImageParams{UserID: userID, Meta: meta, OpKey: pgtype.Text{String: opKey, Valid: true}})
 	case "video":
-		return r.Q.SpendVideo(ctx, db.SpendVideoParams{UserID: userID, Meta: meta, OpKey: pgtype.Text{String: opKey, Valid: true}})
+		return q.SpendVideo(ctx, db.SpendVideoParams{UserID: userID, Meta: meta, OpKey: pgtype.Text{String: opKey, Valid: true}})
 	default:
 		return fmt.Errorf("unknown charge kind: %s", kind)
 	}
@@ -1240,8 +1328,17 @@ func (r *Router) getOrCreateGenerationRequest(
 	params db.InsertGenerationRequestParams,
 	updateID int64,
 ) (db.GenerationRequest, bool, error) {
+	return r.getOrCreateGenerationRequestWithQueries(ctx, r.Q, params, updateID)
+}
+
+func (r *Router) getOrCreateGenerationRequestWithQueries(
+	ctx context.Context,
+	q db.Querier,
+	params db.InsertGenerationRequestParams,
+	updateID int64,
+) (db.GenerationRequest, bool, error) {
 	if updateID > 0 {
-		existing, err := r.Q.GetGenerationRequestByUpdateID(ctx, toInt8(updateID))
+		existing, err := q.GetGenerationRequestByUpdateID(ctx, toInt8(updateID))
 		if err == nil {
 			return generationRequestFromExisting(existing), false, nil
 		}
@@ -1250,12 +1347,12 @@ func (r *Router) getOrCreateGenerationRequest(
 		}
 	}
 
-	gr, err := r.Q.InsertGenerationRequest(ctx, params)
+	gr, err := q.InsertGenerationRequest(ctx, params)
 	if err == nil {
 		return generationRequestFromInsert(gr), true, nil
 	}
 	if updateID > 0 && isUniqueViolation(err) {
-		existing, gerr := r.Q.GetGenerationRequestByUpdateID(ctx, toInt8(updateID))
+		existing, gerr := q.GetGenerationRequestByUpdateID(ctx, toInt8(updateID))
 		if gerr == nil {
 			return generationRequestFromExisting(existing), false, nil
 		}
@@ -1328,6 +1425,14 @@ func isUniqueViolation(err error) bool {
 		return false
 	}
 	return pgErr.Code == "23505"
+}
+
+func isInsufficientCreditError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not enough") && strings.Contains(msg, "credits")
 }
 
 func toInt8(v int64) pgtype.Int8 {

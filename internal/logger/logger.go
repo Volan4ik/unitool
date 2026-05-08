@@ -59,6 +59,13 @@ func New(opts Options) (zerolog.Logger, io.Closer, error) {
 			closers = append(closers, fileWriter)
 		}
 	}
+	if fileErr != nil {
+		var closer io.Closer
+		if len(closers) > 0 {
+			closer = multiCloser(closers)
+		}
+		return zerolog.Logger{}, closer, fmt.Errorf("init file logging path %q: %w", filePath, fileErr)
+	}
 
 	sink := io.MultiWriter(writers...)
 	if opts.DedupeWindow > 0 {
@@ -82,13 +89,6 @@ func New(opts Options) (zerolog.Logger, io.Closer, error) {
 	stdlog.SetOutput(&stdLogBridge{
 		log: base.With().Str("source", "stdlib").Logger(),
 	})
-
-	if fileErr != nil {
-		base.Warn().
-			Err(fileErr).
-			Str("log_file_path", filePath).
-			Msg("file logging disabled; using stdout only")
-	}
 
 	var closer io.Closer
 	if len(closers) > 0 {
@@ -279,8 +279,12 @@ func (w *rotatingFileWriter) Close() error {
 	if w.file == nil {
 		return nil
 	}
+	syncErr := w.file.Sync()
 	err := w.file.Close()
 	w.file = nil
+	if syncErr != nil {
+		return syncErr
+	}
 	return err
 }
 

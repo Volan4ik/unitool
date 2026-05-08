@@ -16,7 +16,7 @@ type Config struct {
 	LogFilePath       string        `envconfig:"LOG_FILE_PATH" default:"./logs/bot.log"`
 	LogRotateMaxMB    int           `envconfig:"LOG_ROTATE_MAX_MB" default:"50"`
 	LogRotateBackups  int           `envconfig:"LOG_ROTATE_BACKUPS" default:"7"`
-	LogDedupeWindowMs int           `envconfig:"LOG_DEDUPE_WINDOW_MS" default:"1500"`
+	LogDedupeWindowMs int           `envconfig:"LOG_DEDUPE_WINDOW_MS" default:"0"`
 	TelegramToken     string        `envconfig:"TELEGRAM_TOKEN" required:"true"`
 	ProviderToken     string        `envconfig:"PROVIDER_TOKEN" required:"true"` // BotFather payments token
 	WebhookURL        string        `envconfig:"WEBHOOK_URL" required:"true"`

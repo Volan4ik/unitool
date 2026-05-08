@@ -6,10 +6,10 @@ Telegram bot on Go with PostgreSQL, webhook delivery, retention cleanup and Prom
 
 1. Configure `.env`:
    - `LOG_LEVEL` (example: `debug`, `info`, `warn`, `error`)
-   - `LOG_FILE_PATH` (default: `./logs/bot.log`; leave empty to disable file logging)
+   - `LOG_FILE_PATH` (default: `./logs/bot.log`; leave empty to disable file logging; in Docker use `/var/log/unitool/bot.log`)
    - `LOG_ROTATE_MAX_MB` (0 disables rotation by size)
    - `LOG_ROTATE_BACKUPS` (how many rotated files to keep)
-   - `LOG_DEDUPE_WINDOW_MS` (suppresses exact duplicate log events inside this window)
+   - `LOG_DEDUPE_WINDOW_MS` (default `0`; optional suppression of exact duplicate log events inside this window)
    - `TELEGRAM_TOKEN`
    - `PROVIDER_TOKEN`
    - `COMET_API_KEY`

@@ -16,7 +16,7 @@ var modelRegistry = map[string][]ModelOption{
 		{UIName: "Deepseek", ProviderID: "deepseek-chat"},
 	},
 	"image": {
-		{UIName: "GPT 4o Image", ProviderID: "gpt-4o-image", IsDefault: true},
+		{UIName: "GPT Image 2", ProviderID: "gpt-image-2", IsDefault: true},
 		{UIName: "Nano Banana", ProviderID: "gemini-3.1-flash-image-preview"},
 		{UIName: "Kling", ProviderID: "kling-v2"},
 	},
