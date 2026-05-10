@@ -117,7 +117,8 @@ FROM users;
 -- name: CountActiveUsers :one
 SELECT COUNT(*)::bigint AS cnt
 FROM users
-WHERE is_banned = FALSE;
+WHERE is_banned = FALSE
+  AND updated_at >= now() - interval '7 days';
 
 -- name: CountBannedUsers :one
 SELECT COUNT(*)::bigint AS cnt
