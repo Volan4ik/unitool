@@ -1,9 +1,15 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image"
+	"image/color"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
 	"strings"
@@ -17,6 +23,8 @@ var mediaGroupSettleDelay = 1200 * time.Millisecond
 const (
 	maxSingleReferenceVideoImages = 1
 	maxKlingVideoReferenceImages  = 4
+	videoReferenceWidth           = 720
+	videoReferenceHeight          = 1280
 )
 
 var encodeReferenceDataURI = buildReferenceDataURIs
@@ -162,6 +170,15 @@ func (r *Router) processReferencePrompt(ctx context.Context, chatID, userID int6
 		_, _ = r.Bot.API.Send(msg)
 		return err
 	}
+	if st.Mode == "video" && !isKlingVideoProviderModel(modelID) {
+		dataURIs, err = fitVideoReferenceDataURIs(dataURIs)
+		if err != nil {
+			msg := tgbotapi.NewMessage(chatID, "Не удалось подготовить референс под формат видео. Попробуйте отправить другую фотографию.")
+			msg.ReplyMarkup = MainReplyKeyboard()
+			_, _ = r.Bot.API.Send(msg)
+			return err
+		}
+	}
 
 	enrichedPrompt := buildPromptWithReferences(prompt, dataURIs)
 	return r.enqueueAsyncMediaPrompt(ctx, chatID, userID, st.Mode, modelID, enrichedPrompt)
@@ -271,6 +288,163 @@ func downloadTelegramImageDataURI(ctx context.Context, bot *tgbotapi.BotAPI, fil
 		contentType = "image/jpeg"
 	}
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(body), nil
+}
+
+func fitVideoReferenceDataURIs(refs []string) ([]string, error) {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		fitted, err := fitVideoReferenceDataURI(ref)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, fitted)
+	}
+	return out, nil
+}
+
+func fitVideoReferenceDataURI(ref string) (string, error) {
+	const prefix = "data:image/"
+	if !strings.HasPrefix(strings.ToLower(ref), prefix) {
+		return ref, nil
+	}
+	comma := strings.IndexByte(ref, ',')
+	if comma <= 0 {
+		return "", fmt.Errorf("invalid image data URI")
+	}
+	meta := strings.ToLower(ref[:comma])
+	if !strings.Contains(meta, ";base64") {
+		return "", fmt.Errorf("image data URI is not base64")
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(ref[comma+1:]))
+	if err != nil {
+		return "", err
+	}
+	src, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return "", err
+	}
+	fitted := resizeCenterCrop(src, videoReferenceWidth, videoReferenceHeight)
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, fitted, &jpeg.Options{Quality: 92}); err != nil {
+		return "", err
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
+func resizeCenterCrop(src image.Image, targetW, targetH int) *image.RGBA {
+	dst := image.NewRGBA(image.Rect(0, 0, targetW, targetH))
+	bounds := src.Bounds()
+	srcW := bounds.Dx()
+	srcH := bounds.Dy()
+	if srcW <= 0 || srcH <= 0 || targetW <= 0 || targetH <= 0 {
+		return dst
+	}
+
+	targetAspect := float64(targetW) / float64(targetH)
+	cropW := srcW
+	cropH := int(float64(cropW) / targetAspect)
+	if cropH > srcH {
+		cropH = srcH
+		cropW = int(float64(cropH) * targetAspect)
+	}
+	if cropW < 1 {
+		cropW = 1
+	}
+	if cropH < 1 {
+		cropH = 1
+	}
+	cropX := bounds.Min.X + (srcW-cropW)/2
+	cropY := bounds.Min.Y + (srcH-cropH)/2
+
+	for y := 0; y < targetH; y++ {
+		sy := float64(cropY) + (float64(y)+0.5)*float64(cropH)/float64(targetH) - 0.5
+		for x := 0; x < targetW; x++ {
+			sx := float64(cropX) + (float64(x)+0.5)*float64(cropW)/float64(targetW) - 0.5
+			dst.Set(x, y, bilinearAt(src, sx, sy, bounds))
+		}
+	}
+	return dst
+}
+
+func bilinearAt(img image.Image, fx, fy float64, bounds image.Rectangle) color.RGBA {
+	x0 := int(fx)
+	y0 := int(fy)
+	if fx < float64(x0) {
+		x0--
+	}
+	if fy < float64(y0) {
+		y0--
+	}
+	x1 := x0 + 1
+	y1 := y0 + 1
+	x0 = clampInt(x0, bounds.Min.X, bounds.Max.X-1)
+	x1 = clampInt(x1, bounds.Min.X, bounds.Max.X-1)
+	y0 = clampInt(y0, bounds.Min.Y, bounds.Max.Y-1)
+	y1 = clampInt(y1, bounds.Min.Y, bounds.Max.Y-1)
+
+	wx := fx - float64(x0)
+	wy := fy - float64(y0)
+	if wx < 0 {
+		wx = 0
+	}
+	if wy < 0 {
+		wy = 0
+	}
+	if wx > 1 {
+		wx = 1
+	}
+	if wy > 1 {
+		wy = 1
+	}
+
+	c00 := rgbaAt(img, x0, y0)
+	c10 := rgbaAt(img, x1, y0)
+	c01 := rgbaAt(img, x0, y1)
+	c11 := rgbaAt(img, x1, y1)
+
+	return color.RGBA{
+		R: blendChannel(c00.R, c10.R, c01.R, c11.R, wx, wy),
+		G: blendChannel(c00.G, c10.G, c01.G, c11.G, wx, wy),
+		B: blendChannel(c00.B, c10.B, c01.B, c11.B, wx, wy),
+		A: blendChannel(c00.A, c10.A, c01.A, c11.A, wx, wy),
+	}
+}
+
+func rgbaAt(img image.Image, x, y int) color.RGBA {
+	r, g, b, a := img.At(x, y).RGBA()
+	return color.RGBA{
+		R: uint8(r >> 8),
+		G: uint8(g >> 8),
+		B: uint8(b >> 8),
+		A: uint8(a >> 8),
+	}
+}
+
+func blendChannel(c00, c10, c01, c11 uint8, wx, wy float64) uint8 {
+	top := float64(c00)*(1-wx) + float64(c10)*wx
+	bottom := float64(c01)*(1-wx) + float64(c11)*wx
+	v := top*(1-wy) + bottom*wy
+	if v <= 0 {
+		return 0
+	}
+	if v >= 255 {
+		return 255
+	}
+	return uint8(v + 0.5)
+}
+
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 func buildPromptWithReferences(prompt string, refs []string) string {

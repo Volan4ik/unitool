@@ -1,6 +1,11 @@
 package telegram
 
 import (
+	"bytes"
+	"encoding/base64"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"strings"
 	"testing"
 
@@ -106,5 +111,45 @@ func TestParseTelegramInputReferenceLine(t *testing.T) {
 		if ok != tc.ok || got != tc.want {
 			t.Fatalf("line=%q got=(%q,%v) want=(%q,%v)", tc.line, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+func TestFitVideoReferenceDataURI(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 300, 200))
+	for y := 0; y < 200; y++ {
+		for x := 0; x < 300; x++ {
+			src.Set(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: 80, A: 255})
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, src, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatal(err)
+	}
+	raw := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	got, err := fitVideoReferenceDataURI(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "data:image/jpeg;base64,") {
+		t.Fatalf("unexpected data URI prefix: %q", got[:32])
+	}
+
+	comma := strings.IndexByte(got, ',')
+	if comma <= 0 {
+		t.Fatalf("invalid data URI: %q", got[:32])
+	}
+	fittedBytes, err := base64.StdEncoding.DecodeString(got[comma+1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fitted, _, err := image.Decode(bytes.NewReader(fittedBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds := fitted.Bounds()
+	if bounds.Dx() != videoReferenceWidth || bounds.Dy() != videoReferenceHeight {
+		t.Fatalf("size=%dx%d want=%dx%d", bounds.Dx(), bounds.Dy(), videoReferenceWidth, videoReferenceHeight)
 	}
 }
