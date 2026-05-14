@@ -133,6 +133,52 @@ func (q *Queries) GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByI
 	return i, err
 }
 
+const getPaidOrdersStatsExcludingTGIDs = `-- name: GetPaidOrdersStatsExcludingTGIDs :one
+SELECT
+  COUNT(*)::bigint AS total_paid_orders,
+  COALESCE(SUM(o.amount_rub), 0)::bigint AS total_paid_amount_rub,
+  COUNT(*) FILTER (
+    WHERE o.paid_at >= $1::timestamptz
+      AND o.paid_at < $2::timestamptz
+  )::bigint AS today_paid_orders,
+  COALESCE(SUM(o.amount_rub) FILTER (
+    WHERE o.paid_at >= $1::timestamptz
+      AND o.paid_at < $2::timestamptz
+  ), 0)::bigint AS today_paid_amount_rub
+FROM orders o
+JOIN users u ON u.id = o.user_id
+WHERE o.status = 'paid'
+  AND (
+    cardinality($3::bigint[]) = 0
+    OR NOT (u.tg_id = ANY($3::bigint[]))
+  )
+`
+
+type GetPaidOrdersStatsExcludingTGIDsParams struct {
+	DayStart      pgtype.Timestamptz `json:"day_start"`
+	DayEnd        pgtype.Timestamptz `json:"day_end"`
+	ExcludedTgIds []int64            `json:"excluded_tg_ids"`
+}
+
+type GetPaidOrdersStatsExcludingTGIDsRow struct {
+	TotalPaidOrders    int64 `json:"total_paid_orders"`
+	TotalPaidAmountRub int64 `json:"total_paid_amount_rub"`
+	TodayPaidOrders    int64 `json:"today_paid_orders"`
+	TodayPaidAmountRub int64 `json:"today_paid_amount_rub"`
+}
+
+func (q *Queries) GetPaidOrdersStatsExcludingTGIDs(ctx context.Context, arg GetPaidOrdersStatsExcludingTGIDsParams) (GetPaidOrdersStatsExcludingTGIDsRow, error) {
+	row := q.db.QueryRow(ctx, getPaidOrdersStatsExcludingTGIDs, arg.DayStart, arg.DayEnd, arg.ExcludedTgIds)
+	var i GetPaidOrdersStatsExcludingTGIDsRow
+	err := row.Scan(
+		&i.TotalPaidOrders,
+		&i.TotalPaidAmountRub,
+		&i.TodayPaidOrders,
+		&i.TodayPaidAmountRub,
+	)
+	return i, err
+}
+
 const markOrderFailed = `-- name: MarkOrderFailed :execrows
 UPDATE orders
 SET status = 'failed'

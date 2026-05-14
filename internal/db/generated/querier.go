@@ -36,6 +36,7 @@ type Querier interface {
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByIDRow, error)
 	GetPackageByCode(ctx context.Context, code string) (Package, error)
 	GetPackageByID(ctx context.Context, id int64) (Package, error)
+	GetPaidOrdersStatsExcludingTGIDs(ctx context.Context, arg GetPaidOrdersStatsExcludingTGIDsParams) (GetPaidOrdersStatsExcludingTGIDsRow, error)
 	GetTelegramUpdateByID(ctx context.Context, updateID int64) (TelegramUpdate, error)
 	GetUserByID(ctx context.Context, id int64) (User, error)
 	GetUserByTGID(ctx context.Context, tgID int64) (User, error)

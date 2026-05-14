@@ -65,3 +65,23 @@ SELECT
   paid_at
 FROM orders
 WHERE id = $1;
+
+-- name: GetPaidOrdersStatsExcludingTGIDs :one
+SELECT
+  COUNT(*)::bigint AS total_paid_orders,
+  COALESCE(SUM(o.amount_rub), 0)::bigint AS total_paid_amount_rub,
+  COUNT(*) FILTER (
+    WHERE o.paid_at >= sqlc.arg(day_start)::timestamptz
+      AND o.paid_at < sqlc.arg(day_end)::timestamptz
+  )::bigint AS today_paid_orders,
+  COALESCE(SUM(o.amount_rub) FILTER (
+    WHERE o.paid_at >= sqlc.arg(day_start)::timestamptz
+      AND o.paid_at < sqlc.arg(day_end)::timestamptz
+  ), 0)::bigint AS today_paid_amount_rub
+FROM orders o
+JOIN users u ON u.id = o.user_id
+WHERE o.status = 'paid'
+  AND (
+    cardinality(sqlc.arg(excluded_tg_ids)::bigint[]) = 0
+    OR NOT (u.tg_id = ANY(sqlc.arg(excluded_tg_ids)::bigint[]))
+  );

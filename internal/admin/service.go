@@ -39,14 +39,18 @@ type UserCard struct {
 }
 
 type Stats struct {
-	TotalUsers int64
-	Active     int64
-	Banned     int64
-	New24h     int64
-	New7d      int64
-	TotalGens  int64
-	TopUsers   []db.TopUsersByGenerationCountRow
-	BySource   []db.CountUsersBySourceTagRow
+	TotalUsers         int64
+	Active             int64
+	Banned             int64
+	New24h             int64
+	New7d              int64
+	TotalGens          int64
+	PaidOrdersTotal    int64
+	PaidAmountRubTotal int64
+	PaidOrdersToday    int64
+	PaidAmountRubToday int64
+	TopUsers           []db.TopUsersByGenerationCountRow
+	BySource           []db.CountUsersBySourceTagRow
 }
 
 type UsersExport struct {
@@ -157,9 +161,12 @@ func (s *Service) SetBanByTGID(ctx context.Context, adminTGID, targetTGID int64,
 	return nil
 }
 
-func (s *Service) GetStats(ctx context.Context, topN int32) (Stats, error) {
+func (s *Service) GetStats(ctx context.Context, topN int32, excludedAdminTGIDs []int64) (Stats, error) {
 	if topN <= 0 {
 		topN = 10
+	}
+	if excludedAdminTGIDs == nil {
+		excludedAdminTGIDs = []int64{}
 	}
 	total, err := s.Q.CountUsers(ctx)
 	if err != nil {
@@ -191,6 +198,16 @@ func (s *Service) GetStats(ctx context.Context, topN int32) (Stats, error) {
 	if err != nil {
 		return Stats{}, err
 	}
+	now := time.Now()
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	paidStats, err := s.Q.GetPaidOrdersStatsExcludingTGIDs(ctx, db.GetPaidOrdersStatsExcludingTGIDsParams{
+		ExcludedTgIds: excludedAdminTGIDs,
+		DayStart:      pgtype.Timestamptz{Time: dayStart, Valid: true},
+		DayEnd:        pgtype.Timestamptz{Time: dayStart.Add(24 * time.Hour), Valid: true},
+	})
+	if err != nil {
+		return Stats{}, err
+	}
 	top, err := s.Q.TopUsersByGenerationCount(ctx, topN)
 	if err != nil {
 		return Stats{}, err
@@ -200,14 +217,18 @@ func (s *Service) GetStats(ctx context.Context, topN int32) (Stats, error) {
 		return Stats{}, err
 	}
 	return Stats{
-		TotalUsers: total,
-		Active:     active,
-		Banned:     banned,
-		New24h:     new24h,
-		New7d:      new7d,
-		TotalGens:  totalGens,
-		TopUsers:   top,
-		BySource:   bySource,
+		TotalUsers:         total,
+		Active:             active,
+		Banned:             banned,
+		New24h:             new24h,
+		New7d:              new7d,
+		TotalGens:          totalGens,
+		PaidOrdersTotal:    paidStats.TotalPaidOrders,
+		PaidAmountRubTotal: paidStats.TotalPaidAmountRub,
+		PaidOrdersToday:    paidStats.TodayPaidOrders,
+		PaidAmountRubToday: paidStats.TodayPaidAmountRub,
+		TopUsers:           top,
+		BySource:           bySource,
 	}, nil
 }
 

@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -361,7 +362,7 @@ func (r *Router) sendAdminUsersExport(ctx context.Context, chatID int64) error {
 		Name:  export.Filename,
 		Bytes: export.Data,
 	})
-	doc.Caption = fmt.Sprintf("Выгрузка пользователей: %d строк. Файл CSV открывается в Excel, Numbers и Google Sheets.", export.Rows)
+	doc.Caption = fmt.Sprintf("Выгрузка пользователей: %d строк", export.Rows)
 	if _, err := r.Bot.API.Send(doc); err != nil {
 		return err
 	}
@@ -369,7 +370,7 @@ func (r *Router) sendAdminUsersExport(ctx context.Context, chatID int64) error {
 }
 
 func (r *Router) sendAdminStats(ctx context.Context, chatID int64) error {
-	st, err := r.Admin.GetStats(ctx, adminTopUsersLimit)
+	st, err := r.Admin.GetStats(ctx, adminTopUsersLimit, r.adminTGIDList())
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка статистики: %v", err)))
 		return err
@@ -383,6 +384,7 @@ func (r *Router) sendAdminStats(ctx context.Context, chatID int64) error {
 		fmt.Sprintf("Новых за 24 часа: %d", st.New24h),
 		fmt.Sprintf("Новых за 7 дней: %d", st.New7d),
 		fmt.Sprintf("Всего генераций: %d", st.TotalGens),
+		fmt.Sprintf("Оплаты: всего %d / %d ₽, сегодня %d / %d ₽", st.PaidOrdersTotal, st.PaidAmountRubTotal, st.PaidOrdersToday, st.PaidAmountRubToday),
 	}
 	if len(st.TopUsers) > 0 {
 		lines = append(lines, "", "Топ пользователей по генерациям:")
@@ -398,6 +400,19 @@ func (r *Router) sendAdminStats(ctx context.Context, chatID int64) error {
 	}
 	r.Bot.API.Send(tgbotapi.NewMessage(chatID, strings.Join(lines, "\n")))
 	return nil
+}
+
+func (r *Router) adminTGIDList() []int64 {
+	r.adminIDsMu.RLock()
+	defer r.adminIDsMu.RUnlock()
+	ids := make([]int64, 0, len(r.adminIDs))
+	for id := range r.adminIDs {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+	return ids
 }
 
 func (r *Router) setAdminFlow(adminTGID int64, action string) {

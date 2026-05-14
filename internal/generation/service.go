@@ -224,6 +224,15 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 		job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output),
 	)
 
+	if err := s.sendMediaResult(ctx, job, output); err != nil {
+		log.Printf(
+			"generation: media delivery failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
+			job.ID, job.UserID, job.ChatID, job.Kind, err,
+		)
+		s.handleFailedAttempt(ctx, job, err, latency)
+		return
+	}
+
 	if _, err := s.Q.MarkGenerationJobDone(ctx, db.MarkGenerationJobDoneParams{
 		ID:         job.ID,
 		ResultText: pgtype.Text{String: output, Valid: output != ""},
@@ -288,8 +297,6 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 			job.ID, job.GenerationRequestID, job.Kind, err,
 		)
 	}
-
-	s.sendMediaResult(ctx, job, output)
 }
 
 func (s *Service) handleFailedAttempt(ctx context.Context, job db.GenerationJob, callErr error, latency int32) {
@@ -443,31 +450,24 @@ func (s *Service) refundOneCredit(ctx context.Context, userID int64, kind string
 	}
 }
 
-func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, output string) {
+func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, output string) error {
 	triedDownloadedVideo := false
 	if output == "" {
 		log.Printf(
 			"generation: empty output fallback job_id=%d user_id=%d chat_id=%d kind=%s",
 			job.ID, job.UserID, job.ChatID, job.Kind,
 		)
-		if err := s.sendText(job.ChatID, "Генерация завершена, но сервис не вернул ссылку на файл."); err != nil {
-			log.Printf(
-				"generation: fallback send failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
-				job.ID, job.UserID, job.ChatID, job.Kind, err,
-			)
-		}
-		return
+		return errors.New("provider returned empty media output")
 	}
 
 	if job.Kind == "image" && isDataImageURI(output) {
-		s.sendInlineImageResult(ctx, job, output)
-		return
+		return s.sendInlineImageResult(ctx, job, output)
 	}
 
 	if job.Kind == "video" && shouldDownloadVideoFirst(output) {
 		triedDownloadedVideo = true
 		if err := s.sendDownloadedVideo(ctx, job, output); err == nil {
-			return
+			return nil
 		} else {
 			log.Printf(
 				"generation: pre-download video send failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v output=%q",
@@ -481,14 +481,7 @@ func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, out
 			"generation: invalid output url fallback job_id=%d user_id=%d chat_id=%d kind=%s output=%q",
 			job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output),
 		)
-		msg := "Генерация завершена, но не удалось обработать ссылку на медиа."
-		if err := s.sendText(job.ChatID, msg); err != nil {
-			log.Printf(
-				"generation: invalid-url fallback send failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
-				job.ID, job.UserID, job.ChatID, job.Kind, err,
-			)
-		}
-		return
+		return fmt.Errorf("provider returned invalid media url: %q", shortOutput(output))
 	}
 
 	var lastErr error
@@ -514,7 +507,7 @@ func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, out
 					"generation: telegram video sent as document job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d output=%q",
 					job.ID, job.UserID, job.ChatID, job.Kind, attempt, shortOutput(output),
 				)
-				return
+				return nil
 			} else {
 				lastErr = fmt.Errorf("sendVideo: %v; sendDocument: %v", lastErr, docErr)
 			}
@@ -526,7 +519,7 @@ func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, out
 				"generation: telegram media send ok job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d output=%q",
 				job.ID, job.UserID, job.ChatID, job.Kind, attempt, shortOutput(output),
 			)
-			return
+			return nil
 		}
 		log.Printf(
 			"generation: telegram media send failed job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d err=%v output=%q",
@@ -540,34 +533,27 @@ func (s *Service) sendMediaResult(ctx context.Context, job db.GenerationJob, out
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return
+			return ctx.Err()
 		case <-timer.C:
 		}
 	}
 
-	msg := "Не удалось отправить медиа как файл. Попробуйте позже."
 	if job.Kind == "video" && !triedDownloadedVideo {
 		if err := s.sendDownloadedVideo(ctx, job, output); err == nil {
-			return
+			return nil
 		} else {
 			log.Printf(
 				"generation: downloaded video fallback failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v output=%q",
 				job.ID, job.UserID, job.ChatID, job.Kind, err, shortOutput(output),
 			)
+			lastErr = err
 		}
 	}
 
-	if err := s.sendText(job.ChatID, msg); err != nil {
-		log.Printf(
-			"generation: telegram text fallback failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
-			job.ID, job.UserID, job.ChatID, job.Kind, err,
-		)
-		return
+	if lastErr == nil {
+		lastErr = errors.New("media delivery failed")
 	}
-	log.Printf(
-		"generation: telegram fallback sent job_id=%d user_id=%d chat_id=%d kind=%s output=%q last_err=%v",
-		job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output), lastErr,
-	)
+	return fmt.Errorf("media delivery failed: %w", lastErr)
 }
 
 func withStateWriteCtx(parent context.Context) (context.Context, context.CancelFunc) {
@@ -577,21 +563,14 @@ func withStateWriteCtx(parent context.Context) (context.Context, context.CancelF
 	return context.WithTimeout(context.Background(), stateWriteTimeout)
 }
 
-func (s *Service) sendInlineImageResult(ctx context.Context, job db.GenerationJob, output string) {
+func (s *Service) sendInlineImageResult(ctx context.Context, job db.GenerationJob, output string) error {
 	mime, blob, err := decodeDataImageURI(output)
 	if err != nil {
 		log.Printf(
 			"generation: invalid inline image fallback job_id=%d user_id=%d chat_id=%d kind=%s err=%v output=%q",
 			job.ID, job.UserID, job.ChatID, job.Kind, err, shortOutput(output),
 		)
-		msg := "Генерация завершена, но встроенное изображение повреждено."
-		if sendErr := s.sendText(job.ChatID, msg); sendErr != nil {
-			log.Printf(
-				"generation: invalid-inline-image fallback send failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
-				job.ID, job.UserID, job.ChatID, job.Kind, sendErr,
-			)
-		}
-		return
+		return fmt.Errorf("invalid inline image output: %w", err)
 	}
 
 	fileName := "generated.png"
@@ -611,7 +590,7 @@ func (s *Service) sendInlineImageResult(ctx context.Context, job db.GenerationJo
 				"generation: telegram inline image send ok job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d bytes=%d",
 				job.ID, job.UserID, job.ChatID, job.Kind, attempt, len(blob),
 			)
-			return
+			return nil
 		}
 		log.Printf(
 			"generation: telegram inline image send failed job_id=%d user_id=%d chat_id=%d kind=%s attempt=%d err=%v",
@@ -625,22 +604,15 @@ func (s *Service) sendInlineImageResult(ctx context.Context, job db.GenerationJo
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return
+			return ctx.Err()
 		case <-timer.C:
 		}
 	}
 
-	if err := s.sendText(job.ChatID, "Не удалось отправить сгенерированное изображение."); err != nil {
-		log.Printf(
-			"generation: inline-image text fallback failed job_id=%d user_id=%d chat_id=%d kind=%s err=%v",
-			job.ID, job.UserID, job.ChatID, job.Kind, err,
-		)
-		return
+	if lastErr == nil {
+		lastErr = errors.New("inline image delivery failed")
 	}
-	log.Printf(
-		"generation: inline-image fallback sent job_id=%d user_id=%d chat_id=%d kind=%s last_err=%v",
-		job.ID, job.UserID, job.ChatID, job.Kind, lastErr,
-	)
+	return fmt.Errorf("inline image delivery failed: %w", lastErr)
 }
 
 func (s *Service) sendDownloadedVideo(ctx context.Context, job db.GenerationJob, output string) error {

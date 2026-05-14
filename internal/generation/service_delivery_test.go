@@ -163,39 +163,41 @@ func TestSendMediaResultAndInlineImage(t *testing.T) {
 	orig := downloadMediaFn
 	t.Cleanup(func() { downloadMediaFn = orig })
 
-	t.Run("empty output fallback text", func(t *testing.T) {
-		bot, mock := newTGAPIMock(t)
+	t.Run("empty output returns delivery error", func(t *testing.T) {
+		bot, _ := newTGAPIMock(t)
 		s := &Service{Bot: bot}
-		s.sendMediaResult(context.Background(), db.GenerationJob{ChatID: 1, Kind: "image"}, "")
-		if mock.callCount("sendMessage") != 1 {
-			t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
+		err := s.sendMediaResult(context.Background(), db.GenerationJob{ChatID: 1, Kind: "image"}, "")
+		if err == nil || !strings.Contains(err.Error(), "empty media output") {
+			t.Fatalf("expected empty output error, got %v", err)
 		}
 	})
 
-	t.Run("invalid output fallback text", func(t *testing.T) {
-		bot, mock := newTGAPIMock(t)
+	t.Run("invalid output returns delivery error", func(t *testing.T) {
+		bot, _ := newTGAPIMock(t)
 		s := &Service{Bot: bot}
-		s.sendMediaResult(context.Background(), db.GenerationJob{ChatID: 1, Kind: "image"}, "not-a-url")
-		if mock.callCount("sendMessage") != 1 {
-			t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
+		err := s.sendMediaResult(context.Background(), db.GenerationJob{ChatID: 1, Kind: "image"}, "not-a-url")
+		if err == nil || !strings.Contains(err.Error(), "invalid media url") {
+			t.Fatalf("expected invalid url error, got %v", err)
 		}
 	})
 
 	t.Run("inline image success", func(t *testing.T) {
 		bot, mock := newTGAPIMock(t)
 		s := &Service{Bot: bot}
-		s.sendMediaResult(context.Background(), db.GenerationJob{ChatID: 1, Kind: "image"}, "data:image/png;base64,aGVsbG8=")
+		if err := s.sendMediaResult(context.Background(), db.GenerationJob{ChatID: 1, Kind: "image"}, "data:image/png;base64,aGVsbG8="); err != nil {
+			t.Fatalf("unexpected err=%v", err)
+		}
 		if mock.callCount("sendPhoto") != 1 {
 			t.Fatalf("sendPhoto calls=%d want=1", mock.callCount("sendPhoto"))
 		}
 	})
 
-	t.Run("inline image invalid fallback", func(t *testing.T) {
-		bot, mock := newTGAPIMock(t)
+	t.Run("inline image invalid returns delivery error", func(t *testing.T) {
+		bot, _ := newTGAPIMock(t)
 		s := &Service{Bot: bot}
-		s.sendInlineImageResult(context.Background(), db.GenerationJob{ChatID: 1, Kind: "image"}, "data:image/png;base64,@@@")
-		if mock.callCount("sendMessage") != 1 {
-			t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
+		err := s.sendInlineImageResult(context.Background(), db.GenerationJob{ChatID: 1, Kind: "image"}, "data:image/png;base64,@@@")
+		if err == nil || !strings.Contains(err.Error(), "invalid inline image") {
+			t.Fatalf("expected invalid inline image error, got %v", err)
 		}
 	})
 
@@ -205,7 +207,9 @@ func TestSendMediaResultAndInlineImage(t *testing.T) {
 			return []byte("video"), "video/mp4", nil
 		}
 		s := &Service{Bot: bot}
-		s.sendMediaResult(context.Background(), db.GenerationJob{ChatID: 1, Kind: "video"}, "https://api.cometapi.com/v1/videos/abc/content")
+		if err := s.sendMediaResult(context.Background(), db.GenerationJob{ChatID: 1, Kind: "video"}, "https://api.cometapi.com/v1/videos/abc/content"); err != nil {
+			t.Fatalf("unexpected err=%v", err)
+		}
 		if mock.callCount("sendVideo") != 1 {
 			t.Fatalf("sendVideo calls=%d want=1", mock.callCount("sendVideo"))
 		}
