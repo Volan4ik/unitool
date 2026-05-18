@@ -77,7 +77,7 @@ const (
 	defaultSourceTag   = "organic"
 	maxSourceTagLen    = 64
 	supportContact     = "@helpper"
-	channelURL         = "@loonagpt"
+	channelURL         = "https://t.me/loonagpt"
 )
 
 var errEmptyModelResponse = errors.New("empty model response")
@@ -249,7 +249,7 @@ func startGreetingText(m *tgbotapi.Message) string {
 			"- Генерация изображений любой сложности с помощью Nano Banana / Chat GPT / Kling\n"+
 			"- Cоздание анимаций и видео с помощью Veo3 / Sora / Kling\n\n"+
 			"Продолжая использование Вы принимаете пользовательское <a href=\"https://teletype.in/@loonagpt\">соглашение</a>.\n\n"+
-			"Так как Вы пришли от наших друзей, мы дарим Вам тестовые 5 генераций. Приступим?",
+			"Так как Вы пришли от наших друзей, мы дарим Вам тестовые генерации. Приступим?",
 		name,
 	)
 }
