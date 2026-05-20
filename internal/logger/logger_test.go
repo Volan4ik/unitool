@@ -53,6 +53,25 @@ func TestNewAllowsStdoutOnlyWhenFilePathEmpty(t *testing.T) {
 	}
 }
 
+func TestNewCreatesMissingLogFileAndDirs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "nested", "bot.log")
+	logg, closer, err := New(Options{
+		AppEnv:       "test",
+		Level:        "info",
+		FilePath:     path,
+		DedupeWindow: 0,
+	})
+	if err != nil {
+		t.Fatalf("logger init must create missing dirs and file: %v", err)
+	}
+	defer closer.Close()
+
+	logg.Info().Msg("created")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected log file to exist: %v", err)
+	}
+}
+
 func TestDedupeWriterSuppressesExactEventIgnoringTimestamp(t *testing.T) {
 	var out bytes.Buffer
 	w := newDedupeWriter(&out, 2*time.Second)

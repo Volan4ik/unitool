@@ -259,6 +259,44 @@ func buildHelpText() string {
 		"Подробнее про отличия моделей ты можешь узнать в нашем канале - <a href=\"" + channelURL + "\">Лýна</a>. Там кстати есть еще библиотека промтов для ИИ фотосессий, и не только)"
 }
 
+const trendPhotoPrompt = `Загруженное лицо человека сохранить максимально реальным, без вайба «АІ-красавчика/ красотки», а как будто это
+«обычный зритель, случайно попавший в кадр во время прямой трансляции КВО».
+Сгенерировать максимально естественно.
+Ощущение захвата кадра с трансляции SPOTV/KBO, ракурс как у камеры на трибунах, вокруг естественно расположить зрителей, стаканы пива, атрибутику болельщиков, веер и т.д.
+
+Важно:
+не ретушировать лицо слишком сильно
+не увеличивать глаза
+не корректировать челюсть
+не делать «идеальную» кожу
+убрать ощущение фотосессии
+убрать вайб инфлюенсера
+Как в реальной трансляции:
+немного размытое качество эфира
+шум сжатия
+лёгкий motion blur
+реалистичная текстура кожи
+выбившиеся волосы и лёгкий блеск/пот
+Поза:
+сидит, закинув ногу на ногу, спокоино смотрит матч, естественное выражение лица - как будто чуть замечает камеру, а может и нет.
+Главная идея:
+не «человек, созданный Al»,
+a
+«обычный человек, которого случайно показали по телевизору и который потом стал вирусным».`
+
+func (r *Router) sendTrendPhotoPrompt(chatID int64) error {
+	msg := tgbotapi.NewMessage(chatID, buildTrendPhotoPromptText())
+	msg.ParseMode = tgbotapi.ModeHTML
+	msg.DisableWebPagePreview = true
+	_, err := r.Bot.API.Send(msg)
+	return err
+}
+
+func buildTrendPhotoPromptText() string {
+	return "Пришлите свою фотографию вместе с описание из этого сообщения чтобы получить результат как на прикрепленном фото\n\n" +
+		"<pre>" + html.EscapeString(trendPhotoPrompt) + "</pre>"
+}
+
 func (r *Router) sendHelpMessage(chatID int64) error {
 	help := tgbotapi.NewMessage(chatID, buildHelpText())
 	help.ParseMode = tgbotapi.ModeHTML
@@ -987,10 +1025,15 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 		if len(parts) < 2 {
 			return nil
 		}
-		if parts[1] == "mode" {
+		switch parts[1] {
+		case "mode":
 			msg := tgbotapi.NewMessage(chatID, "Выберите тип генерации:")
 			msg.ReplyMarkup = ModeInlineKeyboard()
 			if _, err := r.Bot.API.Send(msg); err != nil {
+				return err
+			}
+		case "trend_photo":
+			if err := r.sendTrendPhotoPrompt(chatID); err != nil {
 				return err
 			}
 		}

@@ -11,12 +11,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM alpine:3.21
 WORKDIR /app
 RUN adduser -D -H -u 65532 nonroot \
-    && mkdir -p /var/log/unitool \
-    && chown -R nonroot:nonroot /var/log/unitool /app
+    && mkdir -p /var/log/unitool /data/logs \
+    && chown -R nonroot:nonroot /var/log/unitool /data/logs /app
 COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=build /etc/ssl/certs /etc/ssl/certs
 COPY --from=build /bot /bot
 ENV TZ=UTC \
-    LOG_FILE_PATH=/var/log/unitool/bot.log
+    LOG_FILE_PATH=/data/logs/bot.log
 USER nonroot:nonroot
 ENTRYPOINT ["/bot"]

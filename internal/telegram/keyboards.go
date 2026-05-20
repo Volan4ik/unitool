@@ -55,6 +55,9 @@ func WelcomeInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 			tgbotapi.NewInlineKeyboardButtonData("Сразу хочу платный тариф", "buy:menu"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("СГЕНЕРИРОВАТЬ ТРЕНДОВОЕ ФОТО", "start:trend_photo"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("Расскажите про функционал", "support:help"),
 		),
 	)

@@ -11,6 +11,7 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -43,6 +44,16 @@ func (r *Router) handlePhotoMessage(ctx context.Context, m *tgbotapi.Message, us
 	}
 
 	fileID := largestPhotoFileID(m.Photo)
+	log.Printf(
+		"incoming photo reference user_id=%d chat_id=%d message_id=%d file_id=%s photo_sizes=%d has_caption=%t media_group_id=%q",
+		userID,
+		m.Chat.ID,
+		m.MessageID,
+		fileID,
+		len(m.Photo),
+		strings.TrimSpace(m.Caption) != "",
+		strings.TrimSpace(m.MediaGroupID),
+	)
 	if fileID == "" {
 		msg := tgbotapi.NewMessage(m.Chat.ID, "Не удалось прочитать фото. Попробуйте отправить его ещё раз.")
 		msg.ReplyMarkup = MainReplyKeyboard()

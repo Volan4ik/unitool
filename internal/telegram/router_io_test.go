@@ -89,6 +89,14 @@ func TestStartGreetingAndHelpTexts(t *testing.T) {
 	if !strings.Contains(help, channelURL) {
 		t.Fatalf("help text must reference channel URL, got=%q", help)
 	}
+
+	trend := buildTrendPhotoPromptText()
+	if !strings.Contains(trend, "<pre>") || !strings.Contains(trend, "</pre>") {
+		t.Fatalf("trend photo prompt must be monospace preformatted, got=%q", trend)
+	}
+	if !strings.Contains(trend, "Пришлите свою фотографию") || !strings.Contains(trend, "SPOTV/KBO") {
+		t.Fatalf("missing expected trend photo text, got=%q", trend)
+	}
 }
 
 func TestMessagePromptText(t *testing.T) {

@@ -2,6 +2,18 @@ package telegram
 
 import "testing"
 
+func TestWelcomeInlineKeyboardIncludesTrendPhoto(t *testing.T) {
+	kb := WelcomeInlineKeyboard()
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.Text == "СГЕНЕРИРОВАТЬ ТРЕНДОВОЕ ФОТО" && btn.CallbackData != nil && *btn.CallbackData == "start:trend_photo" {
+				return
+			}
+		}
+	}
+	t.Fatal("trend photo button not found")
+}
+
 func TestModelsInlineKeyboard(t *testing.T) {
 	kb := ModelsInlineKeyboard("image", "Nano Banana")
 	if len(kb.InlineKeyboard) < 2 {
