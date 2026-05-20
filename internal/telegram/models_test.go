@@ -58,12 +58,12 @@ func TestResolveModel(t *testing.T) {
 		t.Fatalf("resolve image model failed: ok=%v got=%q", ok, got)
 	}
 
-	got, ok = ResolveModel("video", "Kling")
+	got, ok = ResolveModel("video", "Kling v2")
 	if !ok || got != "kling-v1-6" {
 		t.Fatalf("resolve video model failed: ok=%v got=%q", ok, got)
 	}
 
-	got, ok = ResolveModel("video", "Doubao Seedance 2.0")
+	got, ok = ResolveModel("video", "Seedance 2.0")
 	if !ok || got != "doubao-seedance-2-0" {
 		t.Fatalf("resolve doubao video model failed: ok=%v got=%q", ok, got)
 	}
