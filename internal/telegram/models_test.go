@@ -13,7 +13,7 @@ func TestModelUIListByModeAndFallback(t *testing.T) {
 	}
 
 	video := ModelUIList("video")
-	wantVideo := []string{"Sora 2", "Doubao Seedance 2.0", "Kling", "Veo 3"}
+	wantVideo := []string{"Sora 2", "Seedance 2.0", "Kling v2", "Veo 3"}
 	if !reflect.DeepEqual(video, wantVideo) {
 		t.Fatalf("video list mismatch: got=%v want=%v", video, wantVideo)
 	}
