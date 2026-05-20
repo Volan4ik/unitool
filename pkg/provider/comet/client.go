@@ -600,7 +600,7 @@ func klingTaskFailureReason(out klingVideoTaskEnvelope) string {
 
 func isSupportedVideoModel(model string) bool {
 	switch normalizeVideoModel(model) {
-	case "sora-2", "kling-v1", "kling-v1-6", "veo3":
+	case "sora-2", "doubao-seedance-2-0", "kling-v1", "kling-v1-6", "veo3":
 		return true
 	default:
 		return false
@@ -610,7 +610,7 @@ func isSupportedVideoModel(model string) bool {
 func (c *Client) generateVideo(ctx context.Context, model string, prompt string, inputReferences []string) (provider.ModelResponse, error) {
 	model = normalizeVideoModel(model)
 	if !isSupportedVideoModel(model) {
-		return provider.ModelResponse{}, fmt.Errorf("unsupported video model %q for Comet video generation (supported: sora-2, kling-v1, kling-v1-6, veo3)", model)
+		return provider.ModelResponse{}, fmt.Errorf("unsupported video model %q for Comet video generation (supported: sora-2, doubao-seedance-2-0, kling-v1, kling-v1-6, veo3)", model)
 	}
 	if isKlingVideoModel(model) {
 		return c.generateKlingVideo(ctx, model, prompt, inputReferences)
@@ -667,6 +667,8 @@ func normalizeVideoModel(model string) string {
 	switch m {
 	case "", "sora2", "sora-2":
 		return "sora-2"
+	case "doubao seedance 2.0", "doubao-seedance-2.0", "doubao-seedance-2-0", "seedance 2.0", "seedance-2.0", "seedance-2-0":
+		return "doubao-seedance-2-0"
 	case "kling", "kling-v2-master":
 		return "kling-v1-6"
 	case "kling-v1":

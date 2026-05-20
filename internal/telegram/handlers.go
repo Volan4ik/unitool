@@ -284,7 +284,15 @@ const trendPhotoPrompt = `Загруженное лицо человека со�
 a
 «обычный человек, которого случайно показали по телевизору и который потом стал вирусным».`
 
+const trendPhotoExampleFileID = "AgACAgIAAxkBAAIbtmoOL1xOautu1kpimEPLKhcWQXjdAAKcG2sb1iJwSFY7aNljQSRuAQADAgADeQADOwQ"
+
 func (r *Router) sendTrendPhotoPrompt(chatID int64) error {
+	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileID(trendPhotoExampleFileID))
+	photo.Caption = "Пример результата после промпта"
+	if _, err := r.Bot.API.Send(photo); err != nil {
+		return err
+	}
+
 	msg := tgbotapi.NewMessage(chatID, buildTrendPhotoPromptText())
 	msg.ParseMode = tgbotapi.ModeHTML
 	msg.DisableWebPagePreview = true
@@ -1099,9 +1107,9 @@ func buildModelsMenuText(mode string) string {
 func modelReferenceLimitsQuote(mode string) string {
 	switch mode {
 	case "video":
-		return "Вы можете отправить референсы для генерации видео одним сообщением с описанием: Sora 2 и Veo 3 — 1 фото; Kling — до 4 фото. Если отправить больше, будут использованы первые фото в рамках лимита."
+		return "Вы можете отправить референсы для генерации видео одним сообщением с описанием: Sora 2, Doubao Seedance 2.0 и Veo 3 — 1 фото; Kling — до 4 фото. Если отправить больше, будут использованы первые фото в рамках лимита."
 	case "image":
-		return "Вы можете отправить референсы для генерации фото одним сообщением с описанием."
+		return "Вы можете отправить референсы для генерации фото раздельно или одним сообщением с описанием."
 	default:
 		return ""
 	}

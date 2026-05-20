@@ -12,6 +12,12 @@ func TestModelUIListByModeAndFallback(t *testing.T) {
 		t.Fatalf("image list mismatch: got=%v want=%v", image, wantImage)
 	}
 
+	video := ModelUIList("video")
+	wantVideo := []string{"Sora 2", "Doubao Seedance 2.0", "Kling", "Veo 3"}
+	if !reflect.DeepEqual(video, wantVideo) {
+		t.Fatalf("video list mismatch: got=%v want=%v", video, wantVideo)
+	}
+
 	unknown := ModelUIList("unknown")
 	text := ModelUIList("text")
 	if !reflect.DeepEqual(unknown, text) {
@@ -55,6 +61,11 @@ func TestResolveModel(t *testing.T) {
 	got, ok = ResolveModel("video", "Kling")
 	if !ok || got != "kling-v1-6" {
 		t.Fatalf("resolve video model failed: ok=%v got=%q", ok, got)
+	}
+
+	got, ok = ResolveModel("video", "Doubao Seedance 2.0")
+	if !ok || got != "doubao-seedance-2-0" {
+		t.Fatalf("resolve doubao video model failed: ok=%v got=%q", ok, got)
 	}
 
 	if got, ok = ResolveModel("image", "Nope"); ok || got != "" {

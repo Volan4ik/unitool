@@ -4,14 +4,13 @@ import "testing"
 
 func TestWelcomeInlineKeyboardIncludesTrendPhoto(t *testing.T) {
 	kb := WelcomeInlineKeyboard()
-	for _, row := range kb.InlineKeyboard {
-		for _, btn := range row {
-			if btn.Text == "СГЕНЕРИРОВАТЬ ТРЕНДОВОЕ ФОТО" && btn.CallbackData != nil && *btn.CallbackData == "start:trend_photo" {
-				return
-			}
-		}
+	if len(kb.InlineKeyboard) == 0 || len(kb.InlineKeyboard[0]) != 1 {
+		t.Fatalf("expected trend photo button in first row, got %#v", kb.InlineKeyboard)
 	}
-	t.Fatal("trend photo button not found")
+	btn := kb.InlineKeyboard[0][0]
+	if btn.Text != "СГЕНЕРИРОВАТЬ ТРЕНДОВОЕ ФОТО" || btn.CallbackData == nil || *btn.CallbackData != "start:trend_photo" {
+		t.Fatalf("unexpected first button: %#v", btn)
+	}
 }
 
 func TestModelsInlineKeyboard(t *testing.T) {

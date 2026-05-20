@@ -49,13 +49,13 @@ func HelpInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 func WelcomeInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("СГЕНЕРИРОВАТЬ ТРЕНДОВОЕ ФОТО", "start:trend_photo"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("Потратить бесплатные генерации", "start:mode"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("Сразу хочу платный тариф", "buy:menu"),
-		),
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("СГЕНЕРИРОВАТЬ ТРЕНДОВОЕ ФОТО", "start:trend_photo"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("Расскажите про функционал", "support:help"),

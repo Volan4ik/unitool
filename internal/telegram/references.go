@@ -209,7 +209,7 @@ func referenceFileIDsForModeModel(mode string, modelID string, fileIDs []string)
 	if isKlingVideoProviderModel(modelID) {
 		return fileIDs[:limit], "Kling поддерживает до 4 фото-референсов для видео. Использую первые 4 фото из отправленных."
 	}
-	return fileIDs[:limit], "Sora 2 и Veo 3 поддерживают только одно фото-референс для видео. Использую первое фото из отправленных."
+	return fileIDs[:limit], "Sora 2, Doubao Seedance 2.0 и Veo 3 поддерживают только одно фото-референс для видео. Использую первое фото из отправленных."
 }
 
 func isKlingVideoProviderModel(modelID string) bool {

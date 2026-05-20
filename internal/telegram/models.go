@@ -22,6 +22,7 @@ var modelRegistry = map[string][]ModelOption{
 	},
 	"video": {
 		{UIName: "Sora 2", ProviderID: "sora-2", IsDefault: true},
+		{UIName: "Doubao Seedance 2.0", ProviderID: "doubao-seedance-2-0"},
 		{UIName: "Kling", ProviderID: "kling-v1-6"},
 		{UIName: "Veo 3", ProviderID: "veo3.1"},
 	},

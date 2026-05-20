@@ -180,6 +180,20 @@ func TestSendStartGreeting(t *testing.T) {
 	})
 }
 
+func TestSendTrendPhotoPromptSendsExampleAndPrompt(t *testing.T) {
+	api, mock := newTelegramBotMock(t)
+	r := &Router{Bot: &Bot{API: api}}
+	if err := r.sendTrendPhotoPrompt(42); err != nil {
+		t.Fatalf("unexpected err=%v", err)
+	}
+	if mock.callCount("sendPhoto") != 1 {
+		t.Fatalf("sendPhoto calls=%d want=1", mock.callCount("sendPhoto"))
+	}
+	if mock.callCount("sendMessage") != 1 {
+		t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
+	}
+}
+
 func TestRouterStateMapsAndAdminCheck(t *testing.T) {
 	r := &Router{
 		adminIDs:    map[int64]struct{}{10: {}},

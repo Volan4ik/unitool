@@ -87,6 +87,53 @@ func TestInputReferencesFromParams(t *testing.T) {
 	}
 }
 
+func TestGenerateDoubaoSeedanceVideoUsesVideosEndpoint(t *testing.T) {
+	c := New("https://api.test", "test-key", time.Second)
+	c.httpc = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/videos":
+			if err := r.ParseMultipartForm(16 << 20); err != nil {
+				t.Fatalf("parse multipart: %v", err)
+			}
+			if got := r.MultipartForm.Value["model"]; len(got) != 1 || got[0] != "doubao-seedance-2-0" {
+				t.Fatalf("unexpected model field: %+v", got)
+			}
+			if got := r.MultipartForm.Value["prompt"]; len(got) != 1 || got[0] != "pan right" {
+				t.Fatalf("unexpected prompt field: %+v", got)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"id":"video-1","status":"queued"}`)),
+				Header:     make(http.Header),
+			}, nil
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/videos/video-1":
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"id":"video-1","status":"completed","url":"https://example.com/out.mp4"}`)),
+				Header:     make(http.Header),
+			}, nil
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return nil, nil
+		}
+	})}
+
+	got, err := c.Generate(context.Background(), provider.ModelRequest{
+		Model:  "doubao-seedance-2-0",
+		Input:  "pan right",
+		Params: map[string]any{"kind": "video"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected err=%v", err)
+	}
+	if got.Output != "https://example.com/out.mp4" {
+		t.Fatalf("unexpected output: %q", got.Output)
+	}
+	if got.Meta["model"] != "doubao-seedance-2-0" || got.Meta["id"] != "video-1" {
+		t.Fatalf("unexpected meta: %+v", got.Meta)
+	}
+}
+
 func TestGenerateImageDefaultsToGPTImage2ImagesEndpoint(t *testing.T) {
 	c := New("https://api.test", "test-key", time.Second)
 	c.httpc = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
