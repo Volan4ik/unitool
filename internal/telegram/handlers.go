@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"net/mail"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"unitool/internal/admin"
+	"unitool/internal/credits"
 	db "unitool/internal/db/generated"
 	"unitool/internal/metrics"
 	"unitool/internal/moderation"
@@ -44,6 +46,9 @@ type Router struct {
 	adminFlowMu sync.Mutex
 	adminFlow   map[int64]adminFlowState
 
+	pendingPaymentsMu sync.Mutex
+	pendingPayments   map[int64]pendingPaymentState
+
 	pendingRefsMu sync.Mutex
 	pendingRefs   map[int64][]string
 
@@ -58,6 +63,12 @@ type UserState struct {
 
 type adminFlowState struct {
 	Action string
+}
+
+type pendingPaymentState struct {
+	ChatID  int64
+	UserID  int64
+	PkgCode string
 }
 
 type BroadcastScheduler interface {
@@ -113,6 +124,7 @@ func NewRouter(
 		StartGuideAnimation: strings.TrimSpace(startGuideAnimation),
 		adminIDs:            idMap,
 		adminFlow:           make(map[int64]adminFlowState),
+		pendingPayments:     make(map[int64]pendingPaymentState),
 		pendingRefs:         make(map[int64][]string),
 		mediaGroups:         make(map[string]*pendingMediaGroup),
 	}
@@ -367,6 +379,9 @@ func (r *Router) handleMessage(ctx context.Context, m *tgbotapi.Message, userID 
 			return nil
 		}
 	}
+	if pending, ok := r.getPendingPayment(userID); ok {
+		return r.handlePendingPaymentEmail(ctx, m, pending)
+	}
 	txt := messagePromptText(m)
 	if len(m.Photo) > 0 {
 		return r.handlePhotoMessage(ctx, m, userID)
@@ -520,7 +535,7 @@ func (r *Router) handleSyncPrompt(ctx context.Context, m *tgbotapi.Message, user
 	chargeMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "sync_generation"})
 	if err := r.chargeOneCredit(ctx, userID, kind, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, kind)); err != nil {
 		r.failGenerationRequestWithLog(ctx, "sync-generation", gr.ID, "failed_balance", err.Error(), pgtype.Int4{})
-		r.sendInsufficientCreditsMessage(m.Chat.ID, kind)
+		r.sendInsufficientCreditsMessage(m.Chat.ID, kind, credits.GenerationCost(kind, modelID))
 		return nil
 	}
 
@@ -721,7 +736,7 @@ func (r *Router) enqueueAsyncMediaPrompt(ctx context.Context, chatID, userID int
 	})
 	if err != nil {
 		if isInsufficientCreditError(err) {
-			r.sendInsufficientCreditsMessage(chatID, kind)
+			r.sendInsufficientCreditsMessage(chatID, kind, credits.GenerationCost(kind, modelID))
 			return nil
 		}
 		if errors.Is(err, errAsyncGenerationQueueFailed) {
@@ -812,13 +827,19 @@ func (r *Router) submitAsyncGeneration(ctx context.Context, p submitAsyncGenerat
 		}
 	}
 
-	chargeMeta, _ := json.Marshal(map[string]any{"gen_id": gr.ID, "source": "async_generation"})
+	creditCost := credits.GenerationCost(p.Kind, p.Model)
+	chargeMeta, _ := json.Marshal(map[string]any{
+		"gen_id": gr.ID,
+		"source": "async_generation",
+		"model":  p.Model,
+		"cost":   creditCost,
+	})
 	spendTx, err := tx.Begin(ctx)
 	if err != nil {
 		return submitAsyncGenerationResult{}, err
 	}
 	spendQ := r.Q.WithTx(spendTx)
-	err = r.chargeOneCreditWithQueries(ctx, spendQ, p.UserID, p.Kind, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, p.Kind))
+	err = r.chargeGenerationCreditsWithQueries(ctx, spendQ, p.UserID, p.Kind, p.Model, chargeMeta, fmt.Sprintf("spend:gen:%d:%s", gr.ID, p.Kind))
 	if err != nil {
 		if rbErr := spendTx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
 			return submitAsyncGenerationResult{}, rbErr
@@ -987,37 +1008,36 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 		if len(parts) < 2 {
 			return nil
 		}
-		code := parts[1]
-		if code == "menu" {
+		action := parts[1]
+		if action == "menu" {
 			if err := r.showPackages(ctx, chatID); err != nil {
 				return err
 			}
 			return nil
 		}
-		pkg, err := r.Q.GetPackageByCode(ctx, code)
-		if err != nil {
-			r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Пакет не найден: %s", code)))
-			return err
-		}
-		p := payments.Package{
-			ID:           pkg.ID,
-			Code:         pkg.Code,
-			Title:        pkg.Title,
-			PriceRub:     int(pkg.PriceRub),
-			TextCredits:  int(pkg.TextCredits),
-			ImageCredits: int(pkg.ImageCredits),
-			VideoCredits: int(pkg.VideoCredits),
-		}
-		if _, err := r.Pay.SendInvoiceForPackage(ctx, chatID, u.ID, p, ""); err != nil {
-			if errors.Is(err, payments.ErrPaymentUnavailableForBanned) {
-				r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Оплата недоступна для заблокированного аккаунта. Обратитесь к администратору."))
+		if action == "tg" || action == "telegram" {
+			if len(parts) < 3 {
 				return nil
 			}
-			if errors.Is(err, payments.ErrBoostRequiresBasePackage) {
-				r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Буст можно купить только один раз после основного тарифа. Чтобы купить буст снова, сначала оплатите один из основных тарифов."))
+			if err := r.startTelegramPayment(ctx, chatID, u.ID, parts[2]); err != nil {
+				return err
+			}
+			return nil
+		}
+		if action == "sbp" {
+			if len(parts) < 3 {
 				return nil
 			}
-			r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка оплаты: %v", err)))
+			if !r.isAdminTGID(userTGID) {
+				return r.answerCallback(cq.ID, "СБП сейчас доступна только для теста")
+			}
+			if err := r.askSBPEmail(ctx, chatID, u.ID, parts[2]); err != nil {
+				return err
+			}
+			return nil
+		}
+		code := action
+		if err := r.showPaymentMethods(ctx, chatID, code, r.isAdminTGID(userTGID)); err != nil {
 			return err
 		}
 	case "support":
@@ -1057,6 +1077,152 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 	}
 	r.Bot.API.Request(tgbotapi.NewCallback(cq.ID, ""))
 	return nil
+}
+
+func (r *Router) showPaymentMethods(ctx context.Context, chatID int64, code string, allowSBP bool) error {
+	pkg, err := r.Q.GetPackageByCode(ctx, code)
+	if err != nil {
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Пакет не найден: %s", code)))
+		return err
+	}
+	text := fmt.Sprintf(
+		"<b>%s</b>\n\nСумма: <b>%d ₽</b>\n\nВыберите способ оплаты:",
+		html.EscapeString(pkg.Title),
+		pkg.PriceRub,
+	)
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = tgbotapi.ModeHTML
+	msg.ReplyMarkup = PaymentMethodInlineKeyboard(code, allowSBP && r.Pay != nil && r.Pay.IsYooKassaEnabled())
+	_, err = r.Bot.API.Send(msg)
+	return err
+}
+
+func (r *Router) startTelegramPayment(ctx context.Context, chatID, userID int64, code string) error {
+	pkg, err := r.Q.GetPackageByCode(ctx, code)
+	if err != nil {
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Пакет не найден: %s", code)))
+		return err
+	}
+	if _, err := r.Pay.SendInvoiceForPackage(ctx, chatID, userID, paymentPackageFromDB(pkg), ""); err != nil {
+		if errors.Is(err, payments.ErrPaymentUnavailableForBanned) {
+			r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Оплата недоступна для заблокированного аккаунта. Обратитесь к администратору."))
+			return nil
+		}
+		if errors.Is(err, payments.ErrBoostRequiresBasePackage) {
+			r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Буст можно купить только один раз после основного тарифа. Чтобы купить буст снова, сначала оплатите один из основных тарифов."))
+			return nil
+		}
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка оплаты: %v", err)))
+		return err
+	}
+	return nil
+}
+
+func (r *Router) askSBPEmail(ctx context.Context, chatID, userID int64, code string) error {
+	if r.Pay == nil || !r.Pay.IsYooKassaEnabled() {
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Оплата через СБП временно недоступна. Выберите оплату картой."))
+		return nil
+	}
+	if _, err := r.Q.GetPackageByCode(ctx, code); err != nil {
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Пакет не найден: %s", code)))
+		return err
+	}
+	r.setPendingPayment(userID, pendingPaymentState{
+		ChatID:  chatID,
+		UserID:  userID,
+		PkgCode: code,
+	})
+	msg := tgbotapi.NewMessage(chatID, "Введите email для чека, затем я пришлю ссылку на оплату через СБП.\n\nЧтобы отменить, отправьте: Отмена")
+	msg.ReplyMarkup = MainReplyKeyboard()
+	_, err := r.Bot.API.Send(msg)
+	return err
+}
+
+func (r *Router) handlePendingPaymentEmail(ctx context.Context, m *tgbotapi.Message, pending pendingPaymentState) error {
+	txt := strings.TrimSpace(m.Text)
+	if strings.EqualFold(txt, "отмена") || strings.EqualFold(txt, "cancel") {
+		r.clearPendingPayment(pending.UserID)
+		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Оплата отменена."))
+		return nil
+	}
+	if !isValidBuyerEmail(txt) {
+		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Похоже, email указан некорректно. Отправьте email еще раз или напишите «Отмена»."))
+		return nil
+	}
+	pkg, err := r.Q.GetPackageByCode(ctx, pending.PkgCode)
+	if err != nil {
+		r.clearPendingPayment(pending.UserID)
+		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Пакет не найден: %s", pending.PkgCode)))
+		return err
+	}
+	orderID, payURL, err := r.Pay.CreateSBPPaymentForPackage(ctx, pending.ChatID, pending.UserID, paymentPackageFromDB(pkg), txt)
+	if err != nil {
+		if errors.Is(err, payments.ErrPaymentUnavailableForBanned) {
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Оплата недоступна для заблокированного аккаунта. Обратитесь к администратору."))
+			return nil
+		}
+		if errors.Is(err, payments.ErrBoostRequiresBasePackage) {
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Буст можно купить только один раз после основного тарифа. Чтобы купить буст снова, сначала оплатите один из основных тарифов."))
+			return nil
+		}
+		if errors.Is(err, payments.ErrYooKassaUnavailable) {
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Оплата через СБП временно недоступна. Выберите оплату картой."))
+			return nil
+		}
+		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Ошибка создания платежа: %v", err)))
+		return err
+	}
+	r.clearPendingPayment(pending.UserID)
+	msg := tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Счёт создан.\nЗаказ: %s\nСумма: %d ₽\n\nПосле оплаты бот автоматически начислит генерации.", orderID, pkg.PriceRub))
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonURL("⚡ Оплатить через СБП", payURL),
+		),
+	)
+	if _, err := r.Bot.API.Send(msg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func paymentPackageFromDB(pkg db.Package) payments.Package {
+	return payments.Package{
+		ID:           pkg.ID,
+		Code:         pkg.Code,
+		Title:        pkg.Title,
+		PriceRub:     int(pkg.PriceRub),
+		TextCredits:  int(pkg.TextCredits),
+		ImageCredits: int(pkg.ImageCredits),
+		VideoCredits: int(pkg.VideoCredits),
+	}
+}
+
+func isValidBuyerEmail(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.ContainsAny(v, " \n\r\t") {
+		return false
+	}
+	addr, err := mail.ParseAddress(v)
+	return err == nil && addr.Address == v && strings.Contains(addr.Address, "@")
+}
+
+func (r *Router) setPendingPayment(userID int64, st pendingPaymentState) {
+	r.pendingPaymentsMu.Lock()
+	defer r.pendingPaymentsMu.Unlock()
+	r.pendingPayments[userID] = st
+}
+
+func (r *Router) getPendingPayment(userID int64) (pendingPaymentState, bool) {
+	r.pendingPaymentsMu.Lock()
+	defer r.pendingPaymentsMu.Unlock()
+	st, ok := r.pendingPayments[userID]
+	return st, ok
+}
+
+func (r *Router) clearPendingPayment(userID int64) {
+	r.pendingPaymentsMu.Lock()
+	defer r.pendingPaymentsMu.Unlock()
+	delete(r.pendingPayments, userID)
 }
 
 func (r *Router) answerCallback(callbackID string, text string) error {
@@ -1150,8 +1316,12 @@ func (r *Router) showProfile(ctx context.Context, chatID, userID int64) error {
 	return nil
 }
 
-func (r *Router) sendInsufficientCreditsMessage(chatID int64, kind string) {
-	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Недостаточно генераций для %s", kindToRus(kind)))
+func (r *Router) sendInsufficientCreditsMessage(chatID int64, kind string, cost int32) {
+	text := fmt.Sprintf("Недостаточно генераций для %s", kindToRus(kind))
+	if cost > 1 {
+		text = fmt.Sprintf("%s. Для выбранной модели нужно %d видео-генерации.", text, cost)
+	}
+	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ReplyMarkup = InsufficientBalanceInlineKeyboard()
 	_, _ = r.Bot.API.Send(msg)
 }
@@ -1323,6 +1493,19 @@ func (r *Router) getState(ctx context.Context, userID int64) (UserState, bool, e
 
 func (r *Router) chargeOneCredit(ctx context.Context, userID int64, kind string, meta []byte, opKey string) error {
 	return r.chargeOneCreditWithQueries(ctx, r.Q, userID, kind, meta, opKey)
+}
+
+func (r *Router) chargeGenerationCreditsWithQueries(ctx context.Context, q db.Querier, userID int64, kind, model string, meta []byte, opKey string) error {
+	cost := credits.GenerationCost(kind, model)
+	if kind == "video" && cost > 1 {
+		return q.SpendVideoCredits(ctx, db.SpendVideoCreditsParams{
+			UserID:  userID,
+			Credits: cost,
+			Meta:    meta,
+			OpKey:   pgtype.Text{String: opKey, Valid: true},
+		})
+	}
+	return r.chargeOneCreditWithQueries(ctx, q, userID, kind, meta, opKey)
 }
 
 func (r *Router) chargeOneCreditWithQueries(ctx context.Context, q db.Querier, userID int64, kind string, meta []byte, opKey string) error {

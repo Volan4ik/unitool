@@ -28,6 +28,13 @@ SET status = 'failed'
 WHERE id = $1
   AND status IN ('created', 'precheckout_ok');
 
+-- name: SetOrderProviderPayment :execrows
+UPDATE orders
+SET provider_payment_charge_id = COALESCE($2, provider_payment_charge_id),
+    provider_data = COALESCE($3, provider_data)
+WHERE id = $1
+  AND status = 'created';
+
 -- name: MarkOrderManualReview :execrows
 UPDATE orders
 SET status = 'manual_review',
@@ -65,6 +72,23 @@ SELECT
   paid_at
 FROM orders
 WHERE id = $1;
+
+-- name: GetOrderByProviderPaymentChargeID :one
+SELECT
+  id,
+  user_id,
+  package_id,
+  amount_rub,
+  currency,
+  status::text AS status,
+  tg_payment_charge_id,
+  provider_payment_charge_id,
+  buyer_email,
+  provider_data,
+  created_at,
+  paid_at
+FROM orders
+WHERE provider_payment_charge_id = $1;
 
 -- name: GetPaidOrdersStatsExcludingTGIDs :one
 SELECT

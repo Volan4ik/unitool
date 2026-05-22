@@ -23,6 +23,11 @@ type Config struct {
 	WebhookSecret     string        `envconfig:"WEBHOOK_SECRET_TOKEN" required:"true"`
 	WebhookMaxBody    int64         `envconfig:"WEBHOOK_MAX_BODY_BYTES" default:"1048576"`
 	WebhookStaleSec   int           `envconfig:"WEBHOOK_UPDATE_STALE_SEC" default:"300"`
+	YooKassaEnabled   bool          `envconfig:"YOOKASSA_ENABLED" default:"true"`
+	YooKassaShopID    string        `envconfig:"YOOKASSA_SHOP_ID"`
+	YooKassaSecretKey string        `envconfig:"YOOKASSA_SECRET_KEY"`
+	YooKassaReturnURL string        `envconfig:"YOOKASSA_RETURN_URL"`
+	YooKassaAPIBase   string        `envconfig:"YOOKASSA_API_BASE" default:"https://api.yookassa.ru"`
 	DBURL             string        `envconfig:"DATABASE_URL" required:"true"`
 	DBMaxConns        int           `envconfig:"DB_MAX_CONNS" default:"120"`
 	DBMinConns        int           `envconfig:"DB_MIN_CONNS" default:"20"`

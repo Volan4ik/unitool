@@ -12,6 +12,10 @@ Telegram bot on Go with PostgreSQL, webhook delivery, retention cleanup and Prom
    - `LOG_DEDUPE_WINDOW_MS` (default `0`; optional suppression of exact duplicate log events inside this window)
    - `TELEGRAM_TOKEN`
    - `PROVIDER_TOKEN`
+   - `YOOKASSA_ENABLED` (default `true`; set `false` to hide SBP payments)
+   - `YOOKASSA_SHOP_ID` (temporary default: `test_shop_id`)
+   - `YOOKASSA_SECRET_KEY` (temporary default: `test_secret_key`)
+   - `YOOKASSA_RETURN_URL` (default: `https://tg-aibot-tutas9.amvera.io/yookassa/return`)
    - `COMET_API_KEY`
    - `DATABASE_URL`
    - `WEBHOOK_URL` (absolute URL with non-root path, example: `https://bot.example.com/tg/webhook`)
@@ -26,4 +30,6 @@ Telegram bot on Go with PostgreSQL, webhook delivery, retention cleanup and Prom
 
 - `GET /healthz`
 - `GET /readyz`
+- `POST /yookassa/webhook`
+- `GET /yookassa/return`
 - `GET /metrics` (on `METRICS_ADDR`)

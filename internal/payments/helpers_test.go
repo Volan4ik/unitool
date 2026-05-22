@@ -63,6 +63,22 @@ func TestBuildProviderDataReceipt(t *testing.T) {
 	if item.Description != "Plan" || item.Amount.Value != "690.00" || item.Amount.Currency != "RUB" {
 		t.Fatalf("unexpected receipt item: %+v", item)
 	}
+	var rawJSON map[string]any
+	if err := json.Unmarshal([]byte(raw), &rawJSON); err != nil {
+		t.Fatalf("failed to unmarshal raw provider data: %v", err)
+	}
+	receiptJSON := rawJSON["receipt"].(map[string]any)
+	itemsJSON := receiptJSON["items"].([]any)
+	amountJSON := itemsJSON[0].(map[string]any)["amount"].(map[string]any)
+	if _, ok := amountJSON["value"]; !ok {
+		t.Fatalf("receipt amount must use lower-case value key, got %v", amountJSON)
+	}
+	if _, ok := amountJSON["currency"]; !ok {
+		t.Fatalf("receipt amount must use lower-case currency key, got %v", amountJSON)
+	}
+	if _, ok := amountJSON["Value"]; ok {
+		t.Fatalf("receipt amount must not use Go field key Value, got %v", amountJSON)
+	}
 	if pd.Receipt.Customer == nil || pd.Receipt.Customer.Email != "user@example.com" {
 		t.Fatalf("unexpected customer: %+v", pd.Receipt.Customer)
 	}

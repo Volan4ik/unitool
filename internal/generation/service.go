@@ -19,6 +19,7 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"unitool/internal/credits"
 	db "unitool/internal/db/generated"
 	"unitool/pkg/provider"
 )
@@ -177,6 +178,7 @@ func (s *Service) recoverStaleRunningJobs(ctx context.Context) {
 			item.UserID,
 			item.ChatID,
 			item.Kind,
+			item.Model,
 			staleFailReason,
 			0,
 			"stale_recovery",
@@ -253,11 +255,12 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 
 	// Finalize generation request metrics/cost only for terminally-claimed runner.
 	var cImg, cVid int32
+	cost := credits.GenerationCost(job.Kind, job.Model)
 	switch job.Kind {
 	case "image":
-		cImg = 1
+		cImg = cost
 	case "video":
-		cVid = 1
+		cVid = cost
 	}
 	reqRows, err := s.Q.FinishGenerationRequest(ctx, db.FinishGenerationRequestParams{
 		ID:               job.GenerationRequestID,
@@ -368,7 +371,7 @@ func (s *Service) finalizeFailedAttempt(ctx context.Context, job db.GenerationJo
 		return
 	}
 
-	s.finalizeFailedSideEffects(ctx, job.ID, job.GenerationRequestID, job.UserID, job.ChatID, job.Kind, errText, latency, "async_generation_failed", true)
+	s.finalizeFailedSideEffects(ctx, job.ID, job.GenerationRequestID, job.UserID, job.ChatID, job.Kind, job.Model, errText, latency, "async_generation_failed", true)
 }
 
 func (s *Service) finalizeFailedSideEffects(
@@ -378,6 +381,7 @@ func (s *Service) finalizeFailedSideEffects(
 	userID int64,
 	chatID int64,
 	kind string,
+	model string,
 	errText string,
 	latency int32,
 	source string,
@@ -407,13 +411,16 @@ func (s *Service) finalizeFailedSideEffects(
 	}
 
 	opKey := fmt.Sprintf("refund:job:%d", jobID)
+	creditCost := credits.GenerationCost(kind, model)
 	meta, _ := json.Marshal(map[string]any{
 		"job_id": jobID,
 		"gen_id": genID,
 		"source": source,
+		"model":  model,
+		"cost":   creditCost,
 		"err":    errText,
 	})
-	refundErr := s.refundOneCredit(stateCtx, userID, kind, meta, opKey)
+	refundErr := s.refundGenerationCredits(stateCtx, userID, kind, model, meta, opKey)
 	if refundErr != nil {
 		log.Printf(
 			"generation: refund failed job_id=%d gen_id=%d user_id=%d kind=%s source=%s op_key=%s err=%v reconcile_required=true",
@@ -437,13 +444,22 @@ func (s *Service) finalizeFailedSideEffects(
 	}
 }
 
-func (s *Service) refundOneCredit(ctx context.Context, userID int64, kind string, meta []byte, opKey string) error {
+func (s *Service) refundGenerationCredits(ctx context.Context, userID int64, kind, model string, meta []byte, opKey string) error {
 	switch kind {
 	case "text":
 		return s.Q.RefundText(ctx, db.RefundTextParams{UserID: userID, Meta: meta, OpKey: pgtype.Text{String: opKey, Valid: true}})
 	case "image":
 		return s.Q.RefundImage(ctx, db.RefundImageParams{UserID: userID, Meta: meta, OpKey: pgtype.Text{String: opKey, Valid: true}})
 	case "video":
+		cost := credits.GenerationCost(kind, model)
+		if cost > 1 {
+			return s.Q.RefundVideoCredits(ctx, db.RefundVideoCreditsParams{
+				UserID:  userID,
+				Credits: cost,
+				Meta:    meta,
+				OpKey:   pgtype.Text{String: opKey, Valid: true},
+			})
+		}
 		return s.Q.RefundVideo(ctx, db.RefundVideoParams{UserID: userID, Meta: meta, OpKey: pgtype.Text{String: opKey, Valid: true}})
 	default:
 		return fmt.Errorf("unknown refund kind: %s", kind)

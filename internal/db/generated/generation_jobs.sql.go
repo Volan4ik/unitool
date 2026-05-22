@@ -204,7 +204,7 @@ SET status = 'failed',
 WHERE status = 'running'
   AND updated_at < now() - ($1::int * interval '1 second')
   AND attempts >= max_attempts
-RETURNING id, generation_request_id, user_id, chat_id, kind, error_message
+RETURNING id, generation_request_id, user_id, chat_id, kind, model, error_message
 `
 
 type FailStaleRunningJobsRow struct {
@@ -213,6 +213,7 @@ type FailStaleRunningJobsRow struct {
 	UserID              int64       `json:"user_id"`
 	ChatID              int64       `json:"chat_id"`
 	Kind                string      `json:"kind"`
+	Model               string      `json:"model"`
 	ErrorMessage        pgtype.Text `json:"error_message"`
 }
 
@@ -231,6 +232,7 @@ func (q *Queries) FailStaleRunningJobs(ctx context.Context, dollar_1 int32) ([]F
 			&i.UserID,
 			&i.ChatID,
 			&i.Kind,
+			&i.Model,
 			&i.ErrorMessage,
 		); err != nil {
 			return nil, err

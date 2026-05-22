@@ -36,14 +36,16 @@ type Package struct {
 type Service struct {
 	Bot           *tgbotapi.BotAPI
 	ProviderToken string
+	YooKassa      *YooKassaClient
+	YooKassaURL   string
 	Pool          *pgxpool.Pool
 	Q             *db.Queries
 	DBTimeout     time.Duration
 	beginTx       func(context.Context) (pgx.Tx, error)
 }
 
-func NewService(bot *tgbotapi.BotAPI, providerToken string, pool *pgxpool.Pool, q *db.Queries) *Service {
-	return &Service{
+func NewService(bot *tgbotapi.BotAPI, providerToken string, pool *pgxpool.Pool, q *db.Queries, yooOpts ...YooKassaOptions) *Service {
+	s := &Service{
 		Bot:           bot,
 		ProviderToken: providerToken,
 		Pool:          pool,
@@ -53,6 +55,11 @@ func NewService(bot *tgbotapi.BotAPI, providerToken string, pool *pgxpool.Pool, 
 			return pool.Begin(ctx)
 		},
 	}
+	if len(yooOpts) > 0 && yooOpts[0].Enabled {
+		s.YooKassa = NewYooKassaClient(yooOpts[0])
+		s.YooKassaURL = strings.TrimSpace(yooOpts[0].ReturnURL)
+	}
+	return s
 }
 
 func (s *Service) SendInvoiceForPackage(ctx context.Context, chatID int64, userID int64, pkg Package, buyerEmail string) (string, error) {
@@ -166,23 +173,51 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Ошибка проверки платежа. Пожалуйста, свяжитесь с поддержкой."))
 		return nil
 	}
+	return s.processPaidOrder(dbCtx, processPaidOrderParams{
+		Order:                   order,
+		OrderUUID:               orderUUID,
+		DisplayOrderID:          payload,
+		AmountRub:               amountRub,
+		TgPaymentChargeID:       sp.TelegramPaymentChargeID,
+		ProviderPaymentChargeID: sp.ProviderPaymentChargeID,
+		BuyerEmail:              buyerEmail,
+		ChatID:                  msg.Chat.ID,
+		SendDuplicateMessage:    true,
+	})
+}
+
+type processPaidOrderParams struct {
+	Order                   db.GetOrderByIDRow
+	OrderUUID               uuid.UUID
+	DisplayOrderID          string
+	AmountRub               int
+	TgPaymentChargeID       string
+	ProviderPaymentChargeID string
+	BuyerEmail              pgtype.Text
+	ChatID                  int64
+	SendDuplicateMessage    bool
+}
+
+func (s *Service) processPaidOrder(dbCtx context.Context, p processPaidOrderParams) error {
+	order := p.Order
+	orderUUID := p.OrderUUID
 	user, err := s.Q.GetUserByID(dbCtx, order.UserID)
 	if err != nil {
 		log.Printf("get user for order %s: %v", orderUUID.String(), err)
-		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
+		s.sendPaymentMessage(p.ChatID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой.")
 		return err
 	}
 	if user.IsBanned {
 		log.Printf("payment: successful payment sent to manual review order=%s user_id=%d reason=banned_user", orderUUID.String(), order.UserID)
 		rows, markErr := s.Q.MarkOrderManualReview(dbCtx, db.MarkOrderManualReviewParams{
 			ID:                      pgtype.UUID{Bytes: orderUUID, Valid: true},
-			TgPaymentChargeID:       pgtype.Text{String: sp.TelegramPaymentChargeID, Valid: sp.TelegramPaymentChargeID != ""},
-			ProviderPaymentChargeID: pgtype.Text{String: sp.ProviderPaymentChargeID, Valid: sp.ProviderPaymentChargeID != ""},
-			BuyerEmail:              buyerEmail,
+			TgPaymentChargeID:       pgtype.Text{String: p.TgPaymentChargeID, Valid: p.TgPaymentChargeID != ""},
+			ProviderPaymentChargeID: pgtype.Text{String: p.ProviderPaymentChargeID, Valid: p.ProviderPaymentChargeID != ""},
+			BuyerEmail:              p.BuyerEmail,
 		})
 		if markErr != nil {
 			log.Printf("payment: mark manual review failed order=%s err=%v", orderUUID.String(), markErr)
-			_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
+			s.sendPaymentMessage(p.ChatID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой.")
 			return markErr
 		}
 		if rows == 0 {
@@ -195,7 +230,7 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 				return fmt.Errorf("illegal manual review transition for order %s, current status=%s", orderUUID.String(), current.Status)
 			}
 		}
-		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, bannedPaymentMessage))
+		s.sendPaymentMessage(p.ChatID, bannedPaymentMessage)
 		return nil
 	}
 	beginTx := s.beginTx
@@ -207,7 +242,7 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 	tx, err := beginTx(dbCtx)
 	if err != nil {
 		log.Printf("begin payment tx failed: %v", err)
-		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
+		s.sendPaymentMessage(p.ChatID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой.")
 		return err
 	}
 	committed := false
@@ -222,9 +257,9 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 	qtx := s.Q.WithTx(tx)
 	if _, err := qtx.MarkOrderPaid(dbCtx, db.MarkOrderPaidParams{
 		ID:                      pgtype.UUID{Bytes: orderUUID, Valid: true},
-		TgPaymentChargeID:       pgtype.Text{String: sp.TelegramPaymentChargeID, Valid: sp.TelegramPaymentChargeID != ""},
-		ProviderPaymentChargeID: pgtype.Text{String: sp.ProviderPaymentChargeID, Valid: sp.ProviderPaymentChargeID != ""},
-		BuyerEmail:              buyerEmail,
+		TgPaymentChargeID:       pgtype.Text{String: p.TgPaymentChargeID, Valid: p.TgPaymentChargeID != ""},
+		ProviderPaymentChargeID: pgtype.Text{String: p.ProviderPaymentChargeID, Valid: p.ProviderPaymentChargeID != ""},
+		BuyerEmail:              p.BuyerEmail,
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			current, gerr := s.Q.GetOrderByID(dbCtx, pgtype.UUID{Bytes: orderUUID, Valid: true})
@@ -232,7 +267,7 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 				orderAlreadyPaid = true
 			} else if gerr == nil && current.Status == "manual_review" {
 				log.Printf("payment duplicate ignored order=%s status=manual_review", orderUUID.String())
-				_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, bannedPaymentMessage))
+				s.sendPaymentMessage(p.ChatID, bannedPaymentMessage)
 				return nil
 			} else if gerr != nil {
 				log.Printf("illegal payment transition and order lookup failed for order %s: %v", orderUUID.String(), gerr)
@@ -247,15 +282,16 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 				}
 				committed = true
 				log.Printf("payment duplicate ignored order=%s status=paid", orderUUID.String())
-				confirm := tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("Оплата уже была обработана ✅\nЗаказ: %s\nСумма: %d ₽", payload, amountRub))
-				if _, sendErr := s.Bot.Send(confirm); sendErr != nil {
-					log.Printf("duplicate payment confirmation send failed order=%s err=%v", orderUUID.String(), sendErr)
+				if p.SendDuplicateMessage {
+					if sendErr := s.sendPaymentMessage(p.ChatID, fmt.Sprintf("Оплата уже была обработана ✅\nЗаказ: %s\nСумма: %d ₽", p.DisplayOrderID, p.AmountRub)); sendErr != nil {
+						log.Printf("duplicate payment confirmation send failed order=%s err=%v", orderUUID.String(), sendErr)
+					}
 				}
 				return nil
 			}
 		}
 		log.Printf("mark order paid failed: %v", err)
-		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой."))
+		s.sendPaymentMessage(p.ChatID, "Платёж получен, но обработка не удалась. Свяжитесь с поддержкой.")
 		return err
 	}
 
@@ -263,7 +299,7 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 	pkg, err := qtx.GetPackageByID(dbCtx, order.PackageID)
 	if err != nil {
 		log.Printf("get package: %v", err)
-		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но пакет не найден. Свяжитесь с поддержкой."))
+		s.sendPaymentMessage(p.ChatID, "Платёж получен, но пакет не найден. Свяжитесь с поддержкой.")
 		return err
 	}
 	meta := map[string]any{
@@ -285,7 +321,7 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 	})
 	if err != nil {
 		log.Printf("grant credits: %v", err)
-		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но начисление не удалось. Свяжитесь с поддержкой."))
+		s.sendPaymentMessage(p.ChatID, "Платёж получен, но начисление не удалось. Свяжитесь с поддержкой.")
 		return err
 	}
 	if creditsInserted == 0 {
@@ -293,7 +329,7 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 	}
 	if err := tx.Commit(dbCtx); err != nil {
 		log.Printf("commit payment tx failed: %v", err)
-		_, _ = s.Bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "Платёж получен, но обработка не завершилась. Свяжитесь с поддержкой."))
+		s.sendPaymentMessage(p.ChatID, "Платёж получен, но обработка не завершилась. Свяжитесь с поддержкой.")
 		return err
 	}
 	committed = true
@@ -305,11 +341,18 @@ func (s *Service) HandleSuccessfulPayment(ctx context.Context, msg *tgbotapi.Mes
 		creditsInserted,
 	)
 
-	confirm := tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("Оплата успешна ✅\nЗаказ: %s\nСумма: %d ₽", payload, amountRub))
-	if _, err := s.Bot.Send(confirm); err != nil {
+	if err := s.sendPaymentMessage(p.ChatID, fmt.Sprintf("Оплата успешна ✅\nЗаказ: %s\nСумма: %d ₽", p.DisplayOrderID, p.AmountRub)); err != nil {
 		log.Printf("payment success confirmation send failed order=%s err=%v", orderUUID.String(), err)
 	}
 	return nil
+}
+
+func (s *Service) sendPaymentMessage(chatID int64, text string) error {
+	if s == nil || s.Bot == nil || chatID == 0 {
+		return nil
+	}
+	_, err := s.Bot.Send(tgbotapi.NewMessage(chatID, text))
+	return err
 }
 
 func (s *Service) validatePreCheckout(ctx context.Context, pcq *tgbotapi.PreCheckoutQuery) (bool, string, error) {
@@ -503,16 +546,31 @@ type receiptItem struct {
 	PaymentMode    string      `json:"payment_mode,omitempty"`
 }
 
-type moneyAmount struct{ Value, Currency string }
+type moneyAmount struct {
+	Value    string `json:"value"`
+	Currency string `json:"currency"`
+}
 
 func buildProviderDataReceipt(title string, priceRub int, email string) string {
-	pd := providerData{Receipt: receipt{Items: []receiptItem{{Description: title, Quantity: "1.00", Amount: moneyAmount{Value: fmt.Sprintf("%.2f", float64(priceRub)), Currency: "RUB"}, VatCode: 1, PaymentSubject: "service", PaymentMode: "full_prepayment"}}}}
-	if email != "" {
-		pd.Receipt.Customer = &customer{Email: email}
-	}
+	pd := providerDataForReceipt(title, priceRub, email)
 	var buf bytes.Buffer
 	_ = json.NewEncoder(&buf).Encode(pd)
 	return buf.String()
+}
+
+func providerDataForReceipt(title string, priceRub int, email string) providerData {
+	pd := providerData{Receipt: receipt{Items: []receiptItem{{
+		Description:    title,
+		Quantity:       "1.00",
+		Amount:         moneyAmount{Value: fmt.Sprintf("%.2f", float64(priceRub)), Currency: "RUB"},
+		VatCode:        1,
+		PaymentSubject: "service",
+		PaymentMode:    "full_prepayment",
+	}}}}
+	if email != "" {
+		pd.Receipt.Customer = &customer{Email: email}
+	}
+	return pd
 }
 
 func buyerEmailText(sp *tgbotapi.SuccessfulPayment) pgtype.Text {

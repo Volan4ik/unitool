@@ -39,6 +39,11 @@ INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
 VALUES ($1, 'video', -1, 'spend', $2, $3)
 ON CONFLICT (op_key) DO NOTHING;
 
+-- name: SpendVideoCredits :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
+VALUES (sqlc.arg(user_id), 'video', 0 - sqlc.arg(credits)::int, 'spend', sqlc.arg(meta), sqlc.arg(op_key))
+ON CONFLICT (op_key) DO NOTHING;
+
 -- name: RefundText :exec
 INSERT INTO credit_ledger (user_id, gen_kind, delta_text, reason, meta, op_key)
 VALUES ($1, 'text', 1, 'refund', $2, $3)
@@ -52,4 +57,9 @@ ON CONFLICT (op_key) DO NOTHING;
 -- name: RefundVideo :exec
 INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
 VALUES ($1, 'video', 1, 'refund', $2, $3)
+ON CONFLICT (op_key) DO NOTHING;
+
+-- name: RefundVideoCredits :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
+VALUES (sqlc.arg(user_id), 'video', sqlc.arg(credits)::int, 'refund', sqlc.arg(meta), sqlc.arg(op_key))
 ON CONFLICT (op_key) DO NOTHING;

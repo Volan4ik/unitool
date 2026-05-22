@@ -133,6 +133,59 @@ func (q *Queries) GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByI
 	return i, err
 }
 
+const getOrderByProviderPaymentChargeID = `-- name: GetOrderByProviderPaymentChargeID :one
+SELECT
+  id,
+  user_id,
+  package_id,
+  amount_rub,
+  currency,
+  status::text AS status,
+  tg_payment_charge_id,
+  provider_payment_charge_id,
+  buyer_email,
+  provider_data,
+  created_at,
+  paid_at
+FROM orders
+WHERE provider_payment_charge_id = $1
+`
+
+type GetOrderByProviderPaymentChargeIDRow struct {
+	ID                      pgtype.UUID        `json:"id"`
+	UserID                  int64              `json:"user_id"`
+	PackageID               int64              `json:"package_id"`
+	AmountRub               int32              `json:"amount_rub"`
+	Currency                string             `json:"currency"`
+	Status                  string             `json:"status"`
+	TgPaymentChargeID       pgtype.Text        `json:"tg_payment_charge_id"`
+	ProviderPaymentChargeID pgtype.Text        `json:"provider_payment_charge_id"`
+	BuyerEmail              pgtype.Text        `json:"buyer_email"`
+	ProviderData            []byte             `json:"provider_data"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	PaidAt                  pgtype.Timestamptz `json:"paid_at"`
+}
+
+func (q *Queries) GetOrderByProviderPaymentChargeID(ctx context.Context, providerPaymentChargeID pgtype.Text) (GetOrderByProviderPaymentChargeIDRow, error) {
+	row := q.db.QueryRow(ctx, getOrderByProviderPaymentChargeID, providerPaymentChargeID)
+	var i GetOrderByProviderPaymentChargeIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.PackageID,
+		&i.AmountRub,
+		&i.Currency,
+		&i.Status,
+		&i.TgPaymentChargeID,
+		&i.ProviderPaymentChargeID,
+		&i.BuyerEmail,
+		&i.ProviderData,
+		&i.CreatedAt,
+		&i.PaidAt,
+	)
+	return i, err
+}
+
 const getPaidOrdersStatsExcludingTGIDs = `-- name: GetPaidOrdersStatsExcludingTGIDs :one
 SELECT
   COUNT(*)::bigint AS total_paid_orders,
@@ -271,6 +324,28 @@ type MarkOrderPrecheckoutParams struct {
 
 func (q *Queries) MarkOrderPrecheckout(ctx context.Context, arg MarkOrderPrecheckoutParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markOrderPrecheckout, arg.ID, arg.BuyerEmail)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setOrderProviderPayment = `-- name: SetOrderProviderPayment :execrows
+UPDATE orders
+SET provider_payment_charge_id = COALESCE($2, provider_payment_charge_id),
+    provider_data = COALESCE($3, provider_data)
+WHERE id = $1
+  AND status = 'created'
+`
+
+type SetOrderProviderPaymentParams struct {
+	ID                      pgtype.UUID `json:"id"`
+	ProviderPaymentChargeID pgtype.Text `json:"provider_payment_charge_id"`
+	ProviderData            []byte      `json:"provider_data"`
+}
+
+func (q *Queries) SetOrderProviderPayment(ctx context.Context, arg SetOrderProviderPaymentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setOrderProviderPayment, arg.ID, arg.ProviderPaymentChargeID, arg.ProviderData)
 	if err != nil {
 		return 0, err
 	}

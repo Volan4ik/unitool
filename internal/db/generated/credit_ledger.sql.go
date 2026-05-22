@@ -138,6 +138,29 @@ func (q *Queries) RefundVideo(ctx context.Context, arg RefundVideoParams) error 
 	return err
 }
 
+const refundVideoCredits = `-- name: RefundVideoCredits :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
+VALUES ($1, 'video', $2::int, 'refund', $3, $4)
+ON CONFLICT (op_key) DO NOTHING
+`
+
+type RefundVideoCreditsParams struct {
+	UserID  int64       `json:"user_id"`
+	Credits int32       `json:"credits"`
+	Meta    []byte      `json:"meta"`
+	OpKey   pgtype.Text `json:"op_key"`
+}
+
+func (q *Queries) RefundVideoCredits(ctx context.Context, arg RefundVideoCreditsParams) error {
+	_, err := q.db.Exec(ctx, refundVideoCredits,
+		arg.UserID,
+		arg.Credits,
+		arg.Meta,
+		arg.OpKey,
+	)
+	return err
+}
+
 const spendImage = `-- name: SpendImage :exec
 INSERT INTO credit_ledger (user_id, gen_kind, delta_image, reason, meta, op_key)
 VALUES ($1, 'image', -1, 'spend', $2, $3)
@@ -186,5 +209,28 @@ type SpendVideoParams struct {
 
 func (q *Queries) SpendVideo(ctx context.Context, arg SpendVideoParams) error {
 	_, err := q.db.Exec(ctx, spendVideo, arg.UserID, arg.Meta, arg.OpKey)
+	return err
+}
+
+const spendVideoCredits = `-- name: SpendVideoCredits :exec
+INSERT INTO credit_ledger (user_id, gen_kind, delta_video, reason, meta, op_key)
+VALUES ($1, 'video', 0 - $2::int, 'spend', $3, $4)
+ON CONFLICT (op_key) DO NOTHING
+`
+
+type SpendVideoCreditsParams struct {
+	UserID  int64       `json:"user_id"`
+	Credits int32       `json:"credits"`
+	Meta    []byte      `json:"meta"`
+	OpKey   pgtype.Text `json:"op_key"`
+}
+
+func (q *Queries) SpendVideoCredits(ctx context.Context, arg SpendVideoCreditsParams) error {
+	_, err := q.db.Exec(ctx, spendVideoCredits,
+		arg.UserID,
+		arg.Credits,
+		arg.Meta,
+		arg.OpKey,
+	)
 	return err
 }

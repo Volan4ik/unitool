@@ -116,6 +116,23 @@ func PackagesInlineKeyboard(items []PackageButton) tgbotapi.InlineKeyboardMarkup
 	return tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
+func PaymentMethodInlineKeyboard(code string, enableSBP bool) tgbotapi.InlineKeyboardMarkup {
+	rows := [][]tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("💳 Оплатить картой", "buy:tg:"+code),
+		),
+	}
+	if enableSBP {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("⚡ Оплатить через СБП", "buy:sbp:"+code),
+		))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("Назад к тарифам", "buy:menu"),
+	))
+	return tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
 func AdminMainInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 	return tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(

@@ -53,3 +53,26 @@ func TestPackagesInlineKeyboard(t *testing.T) {
 		t.Fatalf("fallback label must use code, got %q", kb.InlineKeyboard[1][0].Text)
 	}
 }
+
+func TestPaymentMethodInlineKeyboardHidesSBPWhenDisabled(t *testing.T) {
+	kb := PaymentMethodInlineKeyboard("base", false)
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.CallbackData != nil && *btn.CallbackData == "buy:sbp:base" {
+				t.Fatal("sbp button must be hidden when disabled")
+			}
+		}
+	}
+}
+
+func TestPaymentMethodInlineKeyboardShowsSBPWhenEnabled(t *testing.T) {
+	kb := PaymentMethodInlineKeyboard("base", true)
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.CallbackData != nil && *btn.CallbackData == "buy:sbp:base" {
+				return
+			}
+		}
+	}
+	t.Fatal("sbp button must be visible when enabled")
+}

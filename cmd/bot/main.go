@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -129,7 +130,13 @@ func main() {
 		logg.Fatal().Err(err).Msg("parse ADMIN_IDS")
 	}
 	adminSvc := admin.NewService(queries)
-	pay := payments.NewService(bot.API, cfg.ProviderToken, pg.Pool, queries)
+	pay := payments.NewService(bot.API, cfg.ProviderToken, pg.Pool, queries, payments.YooKassaOptions{
+		Enabled:   cfg.YooKassaEnabled,
+		ShopID:    cfg.YooKassaShopID,
+		SecretKey: cfg.YooKassaSecretKey,
+		ReturnURL: cfg.YooKassaReturnURL,
+		APIBase:   cfg.YooKassaAPIBase,
+	})
 	// Comet provider (OpenAI-compatible endpoints; minimal wiring)
 	comet := cometprov.New(cfg.CometBase, cfg.CometKey, cfg.CometTimeout)
 	// Global provider rate limit
@@ -193,6 +200,43 @@ func main() {
 	if webhookSecret == "" {
 		logg.Fatal().Msg("WEBHOOK_SECRET_TOKEN is required")
 	}
+
+	healthSrv.HandleFunc("/yookassa/webhook", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "method must be POST"})
+			return
+		}
+		if cfg.WebhookMaxBody > 0 {
+			r.Body = http.MaxBytesReader(w, r.Body, cfg.WebhookMaxBody)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			var maxBodyErr *http.MaxBytesError
+			if errors.As(err, &maxBodyErr) {
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+			} else {
+				w.WriteHeader(http.StatusBadRequest)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		if err := pay.HandleYooKassaWebhook(r.Context(), body); err != nil {
+			logg.Error().Err(err).Msg("yookassa webhook failed")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "webhook processing failed"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+	healthSrv.HandleFunc("/yookassa/return", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("Оплата обрабатывается. Вернитесь в Telegram, бот пришлет сообщение после подтверждения платежа."))
+	})
 
 	healthSrv.HandleFunc(webhookURL.Path, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

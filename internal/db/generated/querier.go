@@ -34,6 +34,7 @@ type Querier interface {
 	GetLastChatHistory(ctx context.Context, arg GetLastChatHistoryParams) ([]GetLastChatHistoryRow, error)
 	GetLastPaidPackageByUser(ctx context.Context, userID int64) (GetLastPaidPackageByUserRow, error)
 	GetOrderByID(ctx context.Context, id pgtype.UUID) (GetOrderByIDRow, error)
+	GetOrderByProviderPaymentChargeID(ctx context.Context, providerPaymentChargeID pgtype.Text) (GetOrderByProviderPaymentChargeIDRow, error)
 	GetPackageByCode(ctx context.Context, code string) (Package, error)
 	GetPackageByID(ctx context.Context, id int64) (Package, error)
 	GetPaidOrdersStatsExcludingTGIDs(ctx context.Context, arg GetPaidOrdersStatsExcludingTGIDsParams) (GetPaidOrdersStatsExcludingTGIDsRow, error)
@@ -57,14 +58,17 @@ type Querier interface {
 	RefundImage(ctx context.Context, arg RefundImageParams) error
 	RefundText(ctx context.Context, arg RefundTextParams) error
 	RefundVideo(ctx context.Context, arg RefundVideoParams) error
+	RefundVideoCredits(ctx context.Context, arg RefundVideoCreditsParams) error
 	RequeueGenerationJob(ctx context.Context, arg RequeueGenerationJobParams) (int64, error)
 	RequeueStaleRunningJobs(ctx context.Context, dollar_1 int32) (int64, error)
 	SearchUsersByUsername(ctx context.Context, arg SearchUsersByUsernameParams) ([]User, error)
+	SetOrderProviderPayment(ctx context.Context, arg SetOrderProviderPaymentParams) (int64, error)
 	SetPackageActive(ctx context.Context, arg SetPackageActiveParams) (int64, error)
 	SetUserBanStatus(ctx context.Context, arg SetUserBanStatusParams) (int64, error)
 	SpendImage(ctx context.Context, arg SpendImageParams) error
 	SpendText(ctx context.Context, arg SpendTextParams) error
 	SpendVideo(ctx context.Context, arg SpendVideoParams) error
+	SpendVideoCredits(ctx context.Context, arg SpendVideoCreditsParams) error
 	TopUsersByGenerationCount(ctx context.Context, limit int32) ([]TopUsersByGenerationCountRow, error)
 	TrackUserStartAttribution(ctx context.Context, arg TrackUserStartAttributionParams) (int64, error)
 	UpdatePackage(ctx context.Context, arg UpdatePackageParams) (Package, error)

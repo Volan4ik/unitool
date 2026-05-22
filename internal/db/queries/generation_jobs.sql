@@ -112,4 +112,4 @@ SET status = 'failed',
 WHERE status = 'running'
   AND updated_at < now() - ($1::int * interval '1 second')
   AND attempts >= max_attempts
-RETURNING id, generation_request_id, user_id, chat_id, kind, error_message;
+RETURNING id, generation_request_id, user_id, chat_id, kind, model, error_message;
