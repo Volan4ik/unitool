@@ -1009,16 +1009,24 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 			return nil
 		}
 		action := parts[1]
-		if action == "menu" {
-			if err := r.showPackages(ctx, chatID); err != nil {
-				return err
-			}
-			return nil
-		}
-		if action == "tg" || action == "telegram" {
-			if len(parts) < 3 {
+			if action == "menu" {
+				if err := r.showPackages(ctx, chatID); err != nil {
+					return err
+				}
 				return nil
 			}
+			if action == "cancel_sbp" {
+				if _, ok := r.getPendingPayment(u.ID); ok {
+					r.clearPendingPayment(u.ID)
+					r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Платёж отменён."))
+					return r.answerCallback(cq.ID, "Платёж отменён")
+				}
+				return r.answerCallback(cq.ID, "Активного платежа нет")
+			}
+			if action == "tg" || action == "telegram" {
+				if len(parts) < 3 {
+					return nil
+				}
 			if err := r.startTelegramPayment(ctx, chatID, u.ID, parts[2]); err != nil {
 				return err
 			}
@@ -1028,16 +1036,13 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 			if len(parts) < 3 {
 				return nil
 			}
-			if !r.isAdminTGID(userTGID) {
-				return r.answerCallback(cq.ID, "СБП сейчас доступна только для теста")
-			}
 			if err := r.askSBPEmail(ctx, chatID, u.ID, parts[2]); err != nil {
 				return err
 			}
 			return nil
 		}
 		code := action
-		if err := r.showPaymentMethods(ctx, chatID, code, r.isAdminTGID(userTGID)); err != nil {
+		if err := r.showPaymentMethods(ctx, chatID, code); err != nil {
 			return err
 		}
 	case "support":
@@ -1079,7 +1084,7 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 	return nil
 }
 
-func (r *Router) showPaymentMethods(ctx context.Context, chatID int64, code string, allowSBP bool) error {
+func (r *Router) showPaymentMethods(ctx context.Context, chatID int64, code string) error {
 	pkg, err := r.Q.GetPackageByCode(ctx, code)
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Пакет не найден: %s", code)))
@@ -1092,7 +1097,7 @@ func (r *Router) showPaymentMethods(ctx context.Context, chatID int64, code stri
 	)
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = tgbotapi.ModeHTML
-	msg.ReplyMarkup = PaymentMethodInlineKeyboard(code, allowSBP && r.Pay != nil && r.Pay.IsYooKassaEnabled())
+	msg.ReplyMarkup = PaymentMethodInlineKeyboard(code, r.Pay != nil && r.Pay.IsYooKassaEnabled())
 	_, err = r.Bot.API.Send(msg)
 	return err
 }
@@ -1132,8 +1137,8 @@ func (r *Router) askSBPEmail(ctx context.Context, chatID, userID int64, code str
 		UserID:  userID,
 		PkgCode: code,
 	})
-	msg := tgbotapi.NewMessage(chatID, "Введите email для чека, затем я пришлю ссылку на оплату через СБП.\n\nЧтобы отменить, отправьте: Отмена")
-	msg.ReplyMarkup = MainReplyKeyboard()
+	msg := tgbotapi.NewMessage(chatID, "Введите email для чека, затем я пришлю ссылку на оплату через СБП.")
+	msg.ReplyMarkup = CancelPaymentInlineKeyboard()
 	_, err := r.Bot.API.Send(msg)
 	return err
 }
@@ -1146,7 +1151,9 @@ func (r *Router) handlePendingPaymentEmail(ctx context.Context, m *tgbotapi.Mess
 		return nil
 	}
 	if !isValidBuyerEmail(txt) {
-		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Похоже, email указан некорректно. Отправьте email еще раз или напишите «Отмена»."))
+		msg := tgbotapi.NewMessage(m.Chat.ID, "Похоже, email указан некорректно. Отправьте email ещё раз.")
+		msg.ReplyMarkup = CancelPaymentInlineKeyboard()
+		r.Bot.API.Send(msg)
 		return nil
 	}
 	pkg, err := r.Q.GetPackageByCode(ctx, pending.PkgCode)
@@ -1176,7 +1183,7 @@ func (r *Router) handlePendingPaymentEmail(ctx context.Context, m *tgbotapi.Mess
 	msg := tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Счёт создан.\nЗаказ: %s\nСумма: %d ₽\n\nПосле оплаты бот автоматически начислит генерации.", orderID, pkg.PriceRub))
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonURL("⚡ Оплатить через СБП", payURL),
+			tgbotapi.NewInlineKeyboardButtonURL("⚡ Оплатить", payURL),
 		),
 	)
 	if _, err := r.Bot.API.Send(msg); err != nil {

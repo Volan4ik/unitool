@@ -76,3 +76,14 @@ func TestPaymentMethodInlineKeyboardShowsSBPWhenEnabled(t *testing.T) {
 	}
 	t.Fatal("sbp button must be visible when enabled")
 }
+
+func TestCancelPaymentInlineKeyboard(t *testing.T) {
+	kb := CancelPaymentInlineKeyboard()
+	if len(kb.InlineKeyboard) != 1 || len(kb.InlineKeyboard[0]) != 1 {
+		t.Fatalf("expected one cancel button, got %#v", kb.InlineKeyboard)
+	}
+	btn := kb.InlineKeyboard[0][0]
+	if btn.Text != "Отменить платёж" || btn.CallbackData == nil || *btn.CallbackData != "buy:cancel_sbp" {
+		t.Fatalf("unexpected cancel button: %#v", btn)
+	}
+}
