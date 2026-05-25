@@ -13,9 +13,13 @@ import (
 
 const countActiveUsers = `-- name: CountActiveUsers :one
 SELECT COUNT(*)::bigint AS cnt
-FROM users
-WHERE is_banned = FALSE
-  AND updated_at >= now() - interval '7 days'
+FROM (
+  SELECT DISTINCT gr.user_id
+  FROM generation_requests gr
+  JOIN users u ON u.id = gr.user_id
+  WHERE u.is_banned = FALSE
+    AND gr.created_at >= now() - interval '7 days'
+) active_users
 `
 
 func (q *Queries) CountActiveUsers(ctx context.Context) (int64, error) {
