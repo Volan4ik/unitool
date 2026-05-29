@@ -21,11 +21,11 @@ const (
 	adminActionPkgDeactivate       = "pkg_deactivate"
 	adminActionUserFindID          = "user_find_id"
 	adminActionUserFindName        = "user_find_name"
+	adminActionGrantCredits        = "grant_credits"
 	adminActionBan                 = "ban_set"
 	adminActionUnban               = "ban_unset"
 	adminActionBroadcast           = "broadcast_send"
 	adminUserSearchLimit     int32 = 10
-	adminTopUsersLimit       int32 = 10
 )
 
 func (r *Router) handleAdminCommand(ctx context.Context, m *tgbotapi.Message) error {
@@ -79,7 +79,7 @@ func (r *Router) handleAdminCallback(ctx context.Context, cq *tgbotapi.CallbackQ
 		return r.handleAdminPackagesAction(ctx, cq.From.ID, chatID, parts[2:])
 	case "users":
 		if len(parts) == 2 {
-			msg := tgbotapi.NewMessage(chatID, "Пользователи\n\nПоиск карточки пользователя и выгрузка всей базы в CSV.")
+			msg := tgbotapi.NewMessage(chatID, "Пользователи\n\nПоиск карточки пользователя, начисление генераций и выгрузка всей базы в CSV.")
 			msg.ReplyMarkup = AdminUsersInlineKeyboard()
 			r.Bot.API.Send(msg)
 			return nil
@@ -215,6 +215,29 @@ func (r *Router) handleAdminTextInput(ctx context.Context, m *tgbotapi.Message, 
 		}
 		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, strings.Join(lines, "\n")))
 		return true, nil
+	case adminActionGrantCredits:
+		in, err := parseGrantInput(txt)
+		if err != nil {
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Формат: tg_user_id|photo_count|video_count"))
+			return true, nil
+		}
+		res, err := r.Admin.GrantCreditsByTGID(ctx, adminTGID, in)
+		if err != nil {
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf("Ошибка начисления: %v", err)))
+			return true, err
+		}
+		r.clearAdminFlow(adminTGID)
+		notifyText := formatGrantNotification(in)
+		if _, sendErr := r.Bot.API.Send(tgbotapi.NewMessage(in.TargetTGID, notifyText)); sendErr != nil {
+			r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, fmt.Sprintf(
+				"Генерации начислены, но уведомление пользователю не отправлено: %v\n%s",
+				sendErr,
+				formatGrantResult(res),
+			)))
+			return true, nil
+		}
+		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Генерации начислены, пользователь уведомлён.\n"+formatGrantResult(res)))
+		return true, nil
 	case adminActionBan:
 		tgID, reason, err := parseBanInput(txt)
 		if err != nil {
@@ -312,7 +335,7 @@ func (r *Router) handleAdminPackagesAction(ctx context.Context, adminTGID, chatI
 
 func (r *Router) handleAdminUsersAction(ctx context.Context, adminTGID, chatID int64, parts []string) error {
 	if len(parts) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "Пользователи\n\nПоиск карточки пользователя и выгрузка всей базы в CSV.")
+		msg := tgbotapi.NewMessage(chatID, "Пользователи\n\nПоиск карточки пользователя, начисление генераций и выгрузка всей базы в CSV.")
 		msg.ReplyMarkup = AdminUsersInlineKeyboard()
 		r.Bot.API.Send(msg)
 		return nil
@@ -324,6 +347,9 @@ func (r *Router) handleAdminUsersAction(ctx context.Context, adminTGID, chatID i
 	case "find_username":
 		r.setAdminFlow(adminTGID, adminActionUserFindName)
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Введите username или его часть"))
+	case "grant":
+		r.setAdminFlow(adminTGID, adminActionGrantCredits)
+		r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Введите начисление:\ntg_user_id|photo_count|video_count"))
 	case "export_csv":
 		return r.sendAdminUsersExport(ctx, chatID)
 	default:
@@ -370,7 +396,7 @@ func (r *Router) sendAdminUsersExport(ctx context.Context, chatID int64) error {
 }
 
 func (r *Router) sendAdminStats(ctx context.Context, chatID int64) error {
-	st, err := r.Admin.GetStats(ctx, adminTopUsersLimit, r.adminTGIDList())
+	st, err := r.Admin.GetStats(ctx, r.adminTGIDList())
 	if err != nil {
 		r.Bot.API.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка статистики: %v", err)))
 		return err
@@ -385,12 +411,8 @@ func (r *Router) sendAdminStats(ctx context.Context, chatID int64) error {
 		fmt.Sprintf("Новых за 7 дней: %d", st.New7d),
 		fmt.Sprintf("Всего генераций: %d", st.TotalGens),
 		fmt.Sprintf("Оплаты: всего %d / %d ₽, сегодня %d / %d ₽", st.PaidOrdersTotal, st.PaidAmountRubTotal, st.PaidOrdersToday, st.PaidAmountRubToday),
-	}
-	if len(st.TopUsers) > 0 {
-		lines = append(lines, "", "Топ пользователей по генерациям:")
-		for i, u := range st.TopUsers {
-			lines = append(lines, fmt.Sprintf("%d. tg_id=%d, username=%s, генераций=%d", i+1, u.TgID, textOrDash(u.Username.String, u.Username.Valid), u.GenCount))
-		}
+		fmt.Sprintf("Средний чек: %d ₽", st.AverageCheckRub),
+		fmt.Sprintf("Платящих пользователей: %d (%.2f%%)", st.PaidUsers, st.PayingUsersPercent),
 	}
 	if len(st.BySource) > 0 {
 		lines = append(lines, "", "Пользователи по источникам:")
@@ -499,6 +521,30 @@ func parseBanInput(raw string) (int64, string, error) {
 	return tgID, reason, nil
 }
 
+func parseGrantInput(raw string) (admin.GrantInput, error) {
+	parts := splitInput(raw, 3)
+	if len(parts) != 3 {
+		return admin.GrantInput{}, fmt.Errorf("bad input")
+	}
+	tgID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return admin.GrantInput{}, err
+	}
+	imageCredits, err := strconv.ParseInt(parts[1], 10, 32)
+	if err != nil {
+		return admin.GrantInput{}, err
+	}
+	videoCredits, err := strconv.ParseInt(parts[2], 10, 32)
+	if err != nil {
+		return admin.GrantInput{}, err
+	}
+	return admin.GrantInput{
+		TargetTGID:   tgID,
+		ImageCredits: int32(imageCredits),
+		VideoCredits: int32(videoCredits),
+	}, nil
+}
+
 func parseBool(raw string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "1", "true", "yes", "y", "on":
@@ -524,7 +570,7 @@ func adminMainText() string {
 		"Админ-панель",
 		"",
 		"Тарифы: список, добавление и изменение пакетов.",
-		"Пользователи: поиск, карточка и выгрузка CSV.",
+		"Пользователи: поиск, карточка, начисления и выгрузка CSV.",
 		"Статистика: пользователи, генерации и источники.",
 		"Рассылка: сообщение всем пользователям.",
 	}, "\n")
@@ -561,6 +607,27 @@ func formatUserCard(card admin.UserCard) string {
 		fmt.Sprintf("Всего генераций: %d", card.TotalGenerates),
 	}
 	return strings.Join(lines, "\n")
+}
+
+func formatGrantNotification(in admin.GrantInput) string {
+	parts := make([]string, 0, 2)
+	if in.ImageCredits > 0 {
+		parts = append(parts, fmt.Sprintf("фото: %d", in.ImageCredits))
+	}
+	if in.VideoCredits > 0 {
+		parts = append(parts, fmt.Sprintf("видео: %d", in.VideoCredits))
+	}
+	return "Вам начислено " + strings.Join(parts, ", ") + "."
+}
+
+func formatGrantResult(res admin.GrantResult) string {
+	return fmt.Sprintf(
+		"Telegram ID: %d\nНачислено записей: %d\nТекущий баланс: фото=%d, видео=%d",
+		res.User.TgID,
+		res.RowsAffected,
+		res.ImageBalance,
+		res.VideoBalance,
+	)
 }
 
 func textOrDash(s string, ok bool) string {

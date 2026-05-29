@@ -441,51 +441,6 @@ func (q *Queries) SetUserBanStatus(ctx context.Context, arg SetUserBanStatusPara
 	return result.RowsAffected(), nil
 }
 
-const topUsersByGenerationCount = `-- name: TopUsersByGenerationCount :many
-SELECT
-  u.id,
-  u.tg_id,
-  u.username,
-  COUNT(gr.id)::bigint AS gen_count
-FROM users u
-JOIN generation_requests gr ON gr.user_id = u.id
-GROUP BY u.id, u.tg_id, u.username
-ORDER BY gen_count DESC
-LIMIT $1
-`
-
-type TopUsersByGenerationCountRow struct {
-	ID       int64       `json:"id"`
-	TgID     int64       `json:"tg_id"`
-	Username pgtype.Text `json:"username"`
-	GenCount int64       `json:"gen_count"`
-}
-
-func (q *Queries) TopUsersByGenerationCount(ctx context.Context, limit int32) ([]TopUsersByGenerationCountRow, error) {
-	rows, err := q.db.Query(ctx, topUsersByGenerationCount, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TopUsersByGenerationCountRow
-	for rows.Next() {
-		var i TopUsersByGenerationCountRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.TgID,
-			&i.Username,
-			&i.GenCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const trackUserStartAttribution = `-- name: TrackUserStartAttribution :execrows
 INSERT INTO user_start_attribution (user_id, tg_id, username, source_tag)
 VALUES ($1, $2, $3, $4)

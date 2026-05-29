@@ -47,6 +47,28 @@ func TestValidatePackageInput(t *testing.T) {
 	}
 }
 
+func TestValidateGrantInput(t *testing.T) {
+	if err := validateGrantInput(GrantInput{
+		TargetTGID:   123,
+		ImageCredits: 5,
+		VideoCredits: 2,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cases := []GrantInput{
+		{TargetTGID: 0, ImageCredits: 1},
+		{TargetTGID: 123, ImageCredits: -1},
+		{TargetTGID: 123, VideoCredits: -1},
+		{TargetTGID: 123},
+	}
+	for i, tc := range cases {
+		if err := validateGrantInput(tc); err == nil {
+			t.Fatalf("case #%d expected error", i)
+		}
+	}
+}
+
 func TestBuildUsersCSV(t *testing.T) {
 	createdAt := time.Date(2026, 4, 11, 10, 20, 30, 0, time.UTC)
 	data, err := buildUsersCSV([]db.ListUsersForExportRow{

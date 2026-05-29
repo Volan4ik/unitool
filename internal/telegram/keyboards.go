@@ -184,6 +184,9 @@ func AdminUsersInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
 			tgbotapi.NewInlineKeyboardButtonData("Найти по username", "admin:users:find_username"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Начислить генерации", "admin:users:grant"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("Скачать CSV", "admin:users:export_csv"),
 		),
 		tgbotapi.NewInlineKeyboardRow(

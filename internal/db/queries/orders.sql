@@ -91,21 +91,46 @@ FROM orders
 WHERE provider_payment_charge_id = $1;
 
 -- name: GetPaidOrdersStatsExcludingTGIDs :one
-SELECT
-  COUNT(*)::bigint AS total_paid_orders,
-  COALESCE(SUM(o.amount_rub), 0)::bigint AS total_paid_amount_rub,
-  COUNT(*) FILTER (
-    WHERE o.paid_at >= sqlc.arg(day_start)::timestamptz
-      AND o.paid_at < sqlc.arg(day_end)::timestamptz
-  )::bigint AS today_paid_orders,
-  COALESCE(SUM(o.amount_rub) FILTER (
-    WHERE o.paid_at >= sqlc.arg(day_start)::timestamptz
-      AND o.paid_at < sqlc.arg(day_end)::timestamptz
-  ), 0)::bigint AS today_paid_amount_rub
-FROM orders o
-JOIN users u ON u.id = o.user_id
-WHERE o.status = 'paid'
-  AND (
+WITH eligible_users AS (
+  SELECT id
+  FROM users
+  WHERE (
     cardinality(sqlc.arg(excluded_tg_ids)::bigint[]) = 0
-    OR NOT (u.tg_id = ANY(sqlc.arg(excluded_tg_ids)::bigint[]))
-  );
+    OR NOT (tg_id = ANY(sqlc.arg(excluded_tg_ids)::bigint[]))
+  )
+),
+paid_orders AS (
+  SELECT o.*
+  FROM orders o
+  JOIN eligible_users eu ON eu.id = o.user_id
+  WHERE o.status = 'paid'
+),
+paid_users AS (
+  SELECT COUNT(DISTINCT user_id)::bigint AS cnt
+  FROM paid_orders
+),
+user_totals AS (
+  SELECT COUNT(*)::bigint AS cnt
+  FROM eligible_users
+)
+SELECT
+  COUNT(po.id)::bigint AS total_paid_orders,
+  COALESCE(SUM(po.amount_rub), 0)::bigint AS total_paid_amount_rub,
+  COUNT(po.id) FILTER (
+    WHERE po.paid_at >= sqlc.arg(day_start)::timestamptz
+      AND po.paid_at < sqlc.arg(day_end)::timestamptz
+  )::bigint AS today_paid_orders,
+  COALESCE(SUM(po.amount_rub) FILTER (
+    WHERE po.paid_at >= sqlc.arg(day_start)::timestamptz
+      AND po.paid_at < sqlc.arg(day_end)::timestamptz
+  ), 0)::bigint AS today_paid_amount_rub,
+  COALESCE(ROUND(AVG(po.amount_rub)), 0)::bigint AS average_paid_order_rub,
+  pu.cnt AS paid_users,
+  CASE
+    WHEN ut.cnt = 0 THEN 0::float8
+    ELSE ROUND(((pu.cnt::float8 * 10000) / ut.cnt)::numeric) / 100
+  END::float8 AS paying_users_percent
+FROM paid_users pu
+CROSS JOIN user_totals ut
+LEFT JOIN paid_orders po ON TRUE
+GROUP BY pu.cnt, ut.cnt;

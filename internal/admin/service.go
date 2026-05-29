@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -38,6 +39,20 @@ type UserCard struct {
 	LastPackage    string
 }
 
+type GrantInput struct {
+	TargetTGID   int64
+	ImageCredits int32
+	VideoCredits int32
+	AdminComment string
+}
+
+type GrantResult struct {
+	User         db.User
+	RowsAffected int64
+	ImageBalance int32
+	VideoBalance int32
+}
+
 type Stats struct {
 	TotalUsers         int64
 	Active             int64
@@ -49,7 +64,9 @@ type Stats struct {
 	PaidAmountRubTotal int64
 	PaidOrdersToday    int64
 	PaidAmountRubToday int64
-	TopUsers           []db.TopUsersByGenerationCountRow
+	AverageCheckRub    int64
+	PaidUsers          int64
+	PayingUsersPercent float64
 	BySource           []db.CountUsersBySourceTagRow
 }
 
@@ -161,10 +178,47 @@ func (s *Service) SetBanByTGID(ctx context.Context, adminTGID, targetTGID int64,
 	return nil
 }
 
-func (s *Service) GetStats(ctx context.Context, topN int32, excludedAdminTGIDs []int64) (Stats, error) {
-	if topN <= 0 {
-		topN = 10
+func (s *Service) GrantCreditsByTGID(ctx context.Context, adminTGID int64, in GrantInput) (GrantResult, error) {
+	if err := validateGrantInput(in); err != nil {
+		return GrantResult{}, err
 	}
+	target, err := s.Q.GetUserByTGID(ctx, in.TargetTGID)
+	if err != nil {
+		return GrantResult{}, err
+	}
+	meta, _ := json.Marshal(map[string]any{
+		"source":        "admin_panel",
+		"admin_tg_id":   adminTGID,
+		"target_tg_id":  in.TargetTGID,
+		"image_credits": in.ImageCredits,
+		"video_credits": in.VideoCredits,
+		"comment":       strings.TrimSpace(in.AdminComment),
+	})
+	opKey := fmt.Sprintf("admin_grant:%d:%d:%d", adminTGID, target.ID, time.Now().UTC().UnixNano())
+	rows, err := s.Q.AddAdminGrant(ctx, db.AddAdminGrantParams{
+		UserID:     target.ID,
+		DeltaImage: in.ImageCredits,
+		DeltaVideo: in.VideoCredits,
+		Meta:       meta,
+		OpKey:      pgtype.Text{String: opKey, Valid: true},
+	})
+	if err != nil {
+		return GrantResult{}, err
+	}
+	balances, err := s.Q.GetBalancesByUserID(ctx, target.ID)
+	if err != nil {
+		return GrantResult{}, err
+	}
+	log.Printf("admin action=grant admin_tg_id=%d target_tg_id=%d image=%d video=%d rows=%d", adminTGID, in.TargetTGID, in.ImageCredits, in.VideoCredits, rows)
+	return GrantResult{
+		User:         target,
+		RowsAffected: rows,
+		ImageBalance: balances.ImageBalance,
+		VideoBalance: balances.VideoBalance,
+	}, nil
+}
+
+func (s *Service) GetStats(ctx context.Context, excludedAdminTGIDs []int64) (Stats, error) {
 	if excludedAdminTGIDs == nil {
 		excludedAdminTGIDs = []int64{}
 	}
@@ -208,10 +262,6 @@ func (s *Service) GetStats(ctx context.Context, topN int32, excludedAdminTGIDs [
 	if err != nil {
 		return Stats{}, err
 	}
-	top, err := s.Q.TopUsersByGenerationCount(ctx, topN)
-	if err != nil {
-		return Stats{}, err
-	}
 	bySource, err := s.Q.CountUsersBySourceTag(ctx)
 	if err != nil {
 		return Stats{}, err
@@ -227,7 +277,9 @@ func (s *Service) GetStats(ctx context.Context, topN int32, excludedAdminTGIDs [
 		PaidAmountRubTotal: paidStats.TotalPaidAmountRub,
 		PaidOrdersToday:    paidStats.TodayPaidOrders,
 		PaidAmountRubToday: paidStats.TodayPaidAmountRub,
-		TopUsers:           top,
+		AverageCheckRub:    paidStats.AveragePaidOrderRub,
+		PaidUsers:          paidStats.PaidUsers,
+		PayingUsersPercent: paidStats.PayingUsersPercent,
 		BySource:           bySource,
 	}, nil
 }
@@ -388,4 +440,17 @@ func validatePackageInput(in PackageInput) (db.CreatePackageParams, error) {
 		VideoCredits: in.AttemptsVideo,
 		IsActive:     in.IsActive,
 	}, nil
+}
+
+func validateGrantInput(in GrantInput) error {
+	if in.TargetTGID <= 0 {
+		return errors.New("telegram user id is required")
+	}
+	if in.ImageCredits < 0 || in.VideoCredits < 0 {
+		return errors.New("credit values must be >= 0")
+	}
+	if in.ImageCredits == 0 && in.VideoCredits == 0 {
+		return errors.New("grant must include image and/or video credits")
+	}
+	return nil
 }

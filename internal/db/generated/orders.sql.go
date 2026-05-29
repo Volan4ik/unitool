@@ -187,24 +187,49 @@ func (q *Queries) GetOrderByProviderPaymentChargeID(ctx context.Context, provide
 }
 
 const getPaidOrdersStatsExcludingTGIDs = `-- name: GetPaidOrdersStatsExcludingTGIDs :one
-SELECT
-  COUNT(*)::bigint AS total_paid_orders,
-  COALESCE(SUM(o.amount_rub), 0)::bigint AS total_paid_amount_rub,
-  COUNT(*) FILTER (
-    WHERE o.paid_at >= $1::timestamptz
-      AND o.paid_at < $2::timestamptz
-  )::bigint AS today_paid_orders,
-  COALESCE(SUM(o.amount_rub) FILTER (
-    WHERE o.paid_at >= $1::timestamptz
-      AND o.paid_at < $2::timestamptz
-  ), 0)::bigint AS today_paid_amount_rub
-FROM orders o
-JOIN users u ON u.id = o.user_id
-WHERE o.status = 'paid'
-  AND (
+WITH eligible_users AS (
+  SELECT id
+  FROM users
+  WHERE (
     cardinality($3::bigint[]) = 0
-    OR NOT (u.tg_id = ANY($3::bigint[]))
+    OR NOT (tg_id = ANY($3::bigint[]))
   )
+),
+paid_orders AS (
+  SELECT o.id, o.user_id, o.package_id, o.amount_rub, o.currency, o.status, o.tg_payment_charge_id, o.provider_payment_charge_id, o.buyer_email, o.provider_data, o.created_at, o.paid_at
+  FROM orders o
+  JOIN eligible_users eu ON eu.id = o.user_id
+  WHERE o.status = 'paid'
+),
+paid_users AS (
+  SELECT COUNT(DISTINCT user_id)::bigint AS cnt
+  FROM paid_orders
+),
+user_totals AS (
+  SELECT COUNT(*)::bigint AS cnt
+  FROM eligible_users
+)
+SELECT
+  COUNT(po.id)::bigint AS total_paid_orders,
+  COALESCE(SUM(po.amount_rub), 0)::bigint AS total_paid_amount_rub,
+  COUNT(po.id) FILTER (
+    WHERE po.paid_at >= $1::timestamptz
+      AND po.paid_at < $2::timestamptz
+  )::bigint AS today_paid_orders,
+  COALESCE(SUM(po.amount_rub) FILTER (
+    WHERE po.paid_at >= $1::timestamptz
+      AND po.paid_at < $2::timestamptz
+  ), 0)::bigint AS today_paid_amount_rub,
+  COALESCE(ROUND(AVG(po.amount_rub)), 0)::bigint AS average_paid_order_rub,
+  pu.cnt AS paid_users,
+  CASE
+    WHEN ut.cnt = 0 THEN 0::float8
+    ELSE ROUND(((pu.cnt::float8 * 10000) / ut.cnt)::numeric) / 100
+  END::float8 AS paying_users_percent
+FROM paid_users pu
+CROSS JOIN user_totals ut
+LEFT JOIN paid_orders po ON TRUE
+GROUP BY pu.cnt, ut.cnt
 `
 
 type GetPaidOrdersStatsExcludingTGIDsParams struct {
@@ -214,10 +239,13 @@ type GetPaidOrdersStatsExcludingTGIDsParams struct {
 }
 
 type GetPaidOrdersStatsExcludingTGIDsRow struct {
-	TotalPaidOrders    int64 `json:"total_paid_orders"`
-	TotalPaidAmountRub int64 `json:"total_paid_amount_rub"`
-	TodayPaidOrders    int64 `json:"today_paid_orders"`
-	TodayPaidAmountRub int64 `json:"today_paid_amount_rub"`
+	TotalPaidOrders     int64   `json:"total_paid_orders"`
+	TotalPaidAmountRub  int64   `json:"total_paid_amount_rub"`
+	TodayPaidOrders     int64   `json:"today_paid_orders"`
+	TodayPaidAmountRub  int64   `json:"today_paid_amount_rub"`
+	AveragePaidOrderRub int64   `json:"average_paid_order_rub"`
+	PaidUsers           int64   `json:"paid_users"`
+	PayingUsersPercent  float64 `json:"paying_users_percent"`
 }
 
 func (q *Queries) GetPaidOrdersStatsExcludingTGIDs(ctx context.Context, arg GetPaidOrdersStatsExcludingTGIDsParams) (GetPaidOrdersStatsExcludingTGIDsRow, error) {
@@ -228,6 +256,9 @@ func (q *Queries) GetPaidOrdersStatsExcludingTGIDs(ctx context.Context, arg GetP
 		&i.TotalPaidAmountRub,
 		&i.TodayPaidOrders,
 		&i.TodayPaidAmountRub,
+		&i.AveragePaidOrderRub,
+		&i.PaidUsers,
+		&i.PayingUsersPercent,
 	)
 	return i, err
 }

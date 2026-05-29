@@ -56,6 +56,23 @@ func TestParseBanInput(t *testing.T) {
 	}
 }
 
+func TestParseGrantInput(t *testing.T) {
+	got, err := parseGrantInput("123456|7|2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.TargetTGID != 123456 || got.ImageCredits != 7 || got.VideoCredits != 2 {
+		t.Fatalf("unexpected parsed grant input: %+v", got)
+	}
+
+	if _, err := parseGrantInput("123456|bad|2"); err == nil {
+		t.Fatal("expected error for invalid image credits")
+	}
+	if _, err := parseGrantInput("123456|1"); err == nil {
+		t.Fatal("expected error for short input")
+	}
+}
+
 func TestParseBoolAndSplitInput(t *testing.T) {
 	truthy := []string{"1", "true", "YES", "y", "on"}
 	for _, raw := range truthy {
@@ -95,6 +112,24 @@ func TestFormattingHelpers(t *testing.T) {
 	ts := time.Date(2026, 4, 11, 10, 20, 30, 0, time.UTC)
 	if got := formatTS(ts, true); got != "2026-04-11T10:20:30Z" {
 		t.Fatalf("got %q", got)
+	}
+
+	notification := formatGrantNotification(admin.GrantInput{
+		ImageCredits: 3,
+		VideoCredits: 1,
+	})
+	if notification != "Вам начислено фото: 3, видео: 1." {
+		t.Fatalf("unexpected notification: %q", notification)
+	}
+
+	result := formatGrantResult(admin.GrantResult{
+		User:         db.User{TgID: 123},
+		RowsAffected: 1,
+		ImageBalance: 10,
+		VideoBalance: 4,
+	})
+	if result == "" {
+		t.Fatal("formatted grant result must not be empty")
 	}
 }
 

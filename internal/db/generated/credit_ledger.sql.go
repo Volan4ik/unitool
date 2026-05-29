@@ -11,6 +11,41 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addAdminGrant = `-- name: AddAdminGrant :execrows
+INSERT INTO credit_ledger (
+  user_id,
+  delta_image,
+  delta_video,
+  reason,
+  meta,
+  op_key
+)
+VALUES ($1, $2, $3, 'admin_grant', $4, $5)
+ON CONFLICT (op_key) DO NOTHING
+`
+
+type AddAdminGrantParams struct {
+	UserID     int64       `json:"user_id"`
+	DeltaImage int32       `json:"delta_image"`
+	DeltaVideo int32       `json:"delta_video"`
+	Meta       []byte      `json:"meta"`
+	OpKey      pgtype.Text `json:"op_key"`
+}
+
+func (q *Queries) AddAdminGrant(ctx context.Context, arg AddAdminGrantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, addAdminGrant,
+		arg.UserID,
+		arg.DeltaImage,
+		arg.DeltaVideo,
+		arg.Meta,
+		arg.OpKey,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const addPurchaseCredits = `-- name: AddPurchaseCredits :execrows
 INSERT INTO credit_ledger (
   user_id,

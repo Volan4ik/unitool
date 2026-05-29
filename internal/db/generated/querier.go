@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	AddAdminGrant(ctx context.Context, arg AddAdminGrantParams) (int64, error)
 	AddPurchaseCredits(ctx context.Context, arg AddPurchaseCreditsParams) (int64, error)
 	AddSignupBonus(ctx context.Context, arg AddSignupBonusParams) (int64, error)
 	BeginUpdateProcessing(ctx context.Context, arg BeginUpdateProcessingParams) (int64, error)
@@ -69,7 +70,6 @@ type Querier interface {
 	SpendText(ctx context.Context, arg SpendTextParams) error
 	SpendVideo(ctx context.Context, arg SpendVideoParams) error
 	SpendVideoCredits(ctx context.Context, arg SpendVideoCreditsParams) error
-	TopUsersByGenerationCount(ctx context.Context, limit int32) ([]TopUsersByGenerationCountRow, error)
 	TrackUserStartAttribution(ctx context.Context, arg TrackUserStartAttributionParams) (int64, error)
 	UpdatePackage(ctx context.Context, arg UpdatePackageParams) (Package, error)
 	UpsertConversation(ctx context.Context, arg UpsertConversationParams) (pgtype.UUID, error)

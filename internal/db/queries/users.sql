@@ -167,15 +167,3 @@ SELECT source_tag, COUNT(*)::bigint AS users_count
 FROM user_start_attribution
 GROUP BY source_tag
 ORDER BY users_count DESC, source_tag ASC;
-
--- name: TopUsersByGenerationCount :many
-SELECT
-  u.id,
-  u.tg_id,
-  u.username,
-  COUNT(gr.id)::bigint AS gen_count
-FROM users u
-JOIN generation_requests gr ON gr.user_id = u.id
-GROUP BY u.id, u.tg_id, u.username
-ORDER BY gen_count DESC
-LIMIT $1;
