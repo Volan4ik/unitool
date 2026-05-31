@@ -70,7 +70,7 @@ func TestReferenceFileIDsForModeModel(t *testing.T) {
 	})
 
 	t.Run("kling video keeps up to four references", func(t *testing.T) {
-		refs, warning := referenceFileIDsForModeModel("video", "kling-v1-6", []string{"a", "b", "c", "d", "e"})
+		refs, warning := referenceFileIDsForModeModel("video", "kling-v2-6", []string{"a", "b", "c", "d", "e"})
 		if len(refs) != 4 || refs[0] != "a" || refs[3] != "d" || warning == "" {
 			t.Fatalf("unexpected refs=%v warning=%q", refs, warning)
 		}

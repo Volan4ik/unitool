@@ -21,11 +21,11 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func TestBuildKlingVideoRequest(t *testing.T) {
 	t.Run("text to video without references", func(t *testing.T) {
-		path, payload := buildKlingVideoRequest("kling-v1-6", "move", nil)
+		path, payload := buildKlingVideoRequest("kling-v2-6", "move", nil)
 		if path != "/kling/v1/videos/text2video" {
 			t.Fatalf("unexpected path: %q", path)
 		}
-		if payload.Prompt != "move" || payload.ModelName != "kling-v1-6" || payload.Duration != "5" {
+		if payload.Prompt != "move" || payload.ModelName != "kling-v2-6" || payload.Duration != "5" {
 			t.Fatalf("unexpected payload: %+v", payload)
 		}
 		if payload.Image != "" || len(payload.ImageList) != 0 {
@@ -34,7 +34,7 @@ func TestBuildKlingVideoRequest(t *testing.T) {
 	})
 
 	t.Run("image to video with one reference", func(t *testing.T) {
-		path, payload := buildKlingVideoRequest("kling-v1-6", "move", []string{"data:image/png;base64,QUJD"})
+		path, payload := buildKlingVideoRequest("kling-v2-6", "move", []string{"data:image/png;base64,QUJD"})
 		if path != "/kling/v1/videos/image2video" {
 			t.Fatalf("unexpected path: %q", path)
 		}
@@ -47,7 +47,7 @@ func TestBuildKlingVideoRequest(t *testing.T) {
 	})
 
 	t.Run("multi image to video with multiple references", func(t *testing.T) {
-		path, payload := buildKlingVideoRequest("kling-v1-6", "move", []string{
+		path, payload := buildKlingVideoRequest("kling-v2-6", "move", []string{
 			" first ",
 			"data:image/jpeg;base64,U0VDT05E",
 			"third",

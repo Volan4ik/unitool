@@ -59,7 +59,7 @@ func TestResolveModel(t *testing.T) {
 	}
 
 	got, ok = ResolveModel("video", "Kling v2")
-	if !ok || got != "kling-v1-6" {
+	if !ok || got != "kling-v2-6" {
 		t.Fatalf("resolve video model failed: ok=%v got=%q", ok, got)
 	}
 
