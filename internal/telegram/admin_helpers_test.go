@@ -1,9 +1,11 @@
 package telegram
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"unitool/internal/admin"
 	db "unitool/internal/db/generated"
@@ -70,6 +72,57 @@ func TestParseGrantInput(t *testing.T) {
 	}
 	if _, err := parseGrantInput("123456|1"); err == nil {
 		t.Fatal("expected error for short input")
+	}
+}
+
+func TestAdminFlowMainReplyCommandCancelsPendingInput(t *testing.T) {
+	r := &Router{
+		Admin:     &admin.Service{},
+		adminIDs:  map[int64]struct{}{10: {}},
+		adminFlow: map[int64]adminFlowState{10: {Action: adminActionGrantCredits}},
+	}
+	msg := &tgbotapi.Message{
+		Chat: &tgbotapi.Chat{ID: 10},
+		From: &tgbotapi.User{ID: 10},
+	}
+
+	handled, err := r.handleAdminTextInput(context.Background(), msg, 10, "Фото")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if handled {
+		t.Fatal("main reply command must continue through regular message handling")
+	}
+	if _, ok := r.getAdminFlow(10); ok {
+		t.Fatal("admin flow must be cleared after main reply command")
+	}
+}
+
+func TestAdminFlowCancelTextStopsPendingInput(t *testing.T) {
+	api, mock := newTelegramBotMock(t)
+	r := &Router{
+		Bot:       &Bot{API: api},
+		Admin:     &admin.Service{},
+		adminIDs:  map[int64]struct{}{10: {}},
+		adminFlow: map[int64]adminFlowState{10: {Action: adminActionGrantCredits}},
+	}
+	msg := &tgbotapi.Message{
+		Chat: &tgbotapi.Chat{ID: 10},
+		From: &tgbotapi.User{ID: 10},
+	}
+
+	handled, err := r.handleAdminTextInput(context.Background(), msg, 10, "Отмена")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handled {
+		t.Fatal("cancel text must not continue through regular message handling")
+	}
+	if _, ok := r.getAdminFlow(10); ok {
+		t.Fatal("admin flow must be cleared after cancel text")
+	}
+	if mock.callCount("sendMessage") != 1 {
+		t.Fatalf("sendMessage calls=%d want=1", mock.callCount("sendMessage"))
 	}
 }
 

@@ -97,6 +97,12 @@ func main() {
 			}
 		}()
 	}
+	logFilePath := strings.TrimSpace(cfg.LogFilePath)
+	logg.Info().
+		Str("log_level", cfg.LogLevel).
+		Str("log_file_path", logFilePath).
+		Bool("file_logging_enabled", logFilePath != "").
+		Msg("logger initialized")
 	metrics.Serve(cfg.MetricsAddr)
 	if cfg.CometKey == "" {
 		logg.Fatal().Msg("COMET_API_KEY is required")
@@ -111,6 +117,28 @@ func main() {
 	defer pg.Close()
 
 	healthSrv := health.New(cfg.HTTPAddr, pg)
+	metricsToken := strings.TrimSpace(cfg.MetricsToken)
+	if metricsToken == "" {
+		logg.Warn().Msg("METRICS_TOKEN is empty; protected /metrics on HTTP_ADDR is disabled")
+	} else {
+		metricsHandler := metrics.Handler()
+		healthSrv.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "method must be GET"})
+				return
+			}
+			if !authorizedMetricsRequest(r, metricsToken) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("WWW-Authenticate", `Bearer realm="metrics"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+				return
+			}
+			metricsHandler.ServeHTTP(w, r)
+		})
+	}
 
 	bot, err := telegram.New(cfg.TelegramToken)
 	if err != nil {
@@ -449,4 +477,14 @@ func main() {
 
 func toText(v string) pgtype.Text {
 	return pgtype.Text{String: v, Valid: v != ""}
+}
+
+func authorizedMetricsRequest(r *http.Request, token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" || r == nil {
+		return false
+	}
+	got := strings.TrimSpace(r.Header.Get("Authorization"))
+	want := "Bearer " + token
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }

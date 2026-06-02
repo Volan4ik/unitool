@@ -169,6 +169,9 @@ func (r *Router) HandleUpdate(ctx context.Context, upd tgbotapi.Update) error {
 }
 
 func (r *Router) handleCommand(ctx context.Context, m *tgbotapi.Message, userID int64) error {
+	if m.From != nil && r.isAdminTGID(m.From.ID) {
+		r.clearAdminFlow(m.From.ID)
+	}
 	switch m.Command() {
 	case "start":
 		if err := r.trackStartSource(ctx, userID, m); err != nil {
@@ -261,7 +264,7 @@ func startGreetingText(m *tgbotapi.Message) string {
 			"- Генерация изображений любой сложности с помощью Nano Banana / Chat GPT / Kling\n"+
 			"- Cоздание анимаций и видео с помощью Veo3 / Sora / Kling\n\n"+
 			"Продолжая использование Вы принимаете пользовательское <a href=\"https://teletype.in/@loonagpt\">соглашение</a>.\n\n"+
-			"Так как Вы пришли от наших друзей, мы дарим Вам тестовые генерации. Приступим?",
+			"Бесплатная генерация уже у вас на балансе. \n Приступим?",
 		name,
 	)
 }
@@ -1009,24 +1012,24 @@ func (r *Router) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery)
 			return nil
 		}
 		action := parts[1]
-			if action == "menu" {
-				if err := r.showPackages(ctx, chatID); err != nil {
-					return err
-				}
+		if action == "menu" {
+			if err := r.showPackages(ctx, chatID); err != nil {
+				return err
+			}
+			return nil
+		}
+		if action == "cancel_sbp" {
+			if _, ok := r.getPendingPayment(u.ID); ok {
+				r.clearPendingPayment(u.ID)
+				r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Платёж отменён."))
+				return r.answerCallback(cq.ID, "Платёж отменён")
+			}
+			return r.answerCallback(cq.ID, "Активного платежа нет")
+		}
+		if action == "tg" || action == "telegram" {
+			if len(parts) < 3 {
 				return nil
 			}
-			if action == "cancel_sbp" {
-				if _, ok := r.getPendingPayment(u.ID); ok {
-					r.clearPendingPayment(u.ID)
-					r.Bot.API.Send(tgbotapi.NewMessage(chatID, "Платёж отменён."))
-					return r.answerCallback(cq.ID, "Платёж отменён")
-				}
-				return r.answerCallback(cq.ID, "Активного платежа нет")
-			}
-			if action == "tg" || action == "telegram" {
-				if len(parts) < 3 {
-					return nil
-				}
 			if err := r.startTelegramPayment(ctx, chatID, u.ID, parts[2]); err != nil {
 				return err
 			}

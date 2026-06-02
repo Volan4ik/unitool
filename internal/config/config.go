@@ -12,6 +12,7 @@ type Config struct {
 	AppEnv            string        `envconfig:"APP_ENV" default:"dev"`
 	HTTPAddr          string        `envconfig:"HTTP_ADDR" default:":8080"`
 	MetricsAddr       string        `envconfig:"METRICS_ADDR" default:":9090"`
+	MetricsToken      string        `envconfig:"METRICS_TOKEN" default:""`
 	LogLevel          string        `envconfig:"LOG_LEVEL" default:"info"`
 	LogFilePath       string        `envconfig:"LOG_FILE_PATH" default:"./logs/bot.log"`
 	LogRotateMaxMB    int           `envconfig:"LOG_ROTATE_MAX_MB" default:"50"`

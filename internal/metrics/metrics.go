@@ -2,12 +2,15 @@ package metrics
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
+	registerOnce sync.Once
+
 	CometRequests = prometheus.NewCounterVec(
 		prometheus.CounterOpts{Name: "comet_requests_total", Help: "Comet API calls"},
 		[]string{"endpoint", "result", "code"},
@@ -30,9 +33,20 @@ var (
 	)
 )
 
+func Register() {
+	registerOnce.Do(func() {
+		reg := prometheus.DefaultRegisterer
+		reg.MustRegister(CometRequests, CometLatencyMs, CometRetries, CometStreamLength, StreamEdits)
+	})
+}
+
+func Handler() http.Handler {
+	Register()
+	return promhttp.Handler()
+}
+
 func Serve(addr string) {
-	reg := prometheus.DefaultRegisterer
-	reg.MustRegister(CometRequests, CometLatencyMs, CometRetries, CometStreamLength, StreamEdits)
-	http.Handle("/metrics", promhttp.Handler())
+	Register()
+	http.Handle("/metrics", Handler())
 	go http.ListenAndServe(addr, nil)
 }

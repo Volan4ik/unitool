@@ -120,6 +120,15 @@ func (r *Router) handleAdminTextInput(ctx context.Context, m *tgbotapi.Message, 
 	if !ok {
 		return false, nil
 	}
+	if isAdminFlowMainReplyText(txt) {
+		r.clearAdminFlow(adminTGID)
+		return false, nil
+	}
+	if isAdminFlowCancelText(txt) {
+		r.clearAdminFlow(adminTGID)
+		r.Bot.API.Send(tgbotapi.NewMessage(m.Chat.ID, "Действие отменено."))
+		return true, nil
+	}
 	switch state.Action {
 	case adminActionPkgAdd:
 		in, err := parsePackageInput(txt)
@@ -454,6 +463,24 @@ func (r *Router) getAdminFlow(adminTGID int64) (adminFlowState, bool) {
 	defer r.adminFlowMu.Unlock()
 	v, ok := r.adminFlow[adminTGID]
 	return v, ok
+}
+
+func isAdminFlowMainReplyText(txt string) bool {
+	switch strings.TrimSpace(txt) {
+	case "Фото", "Создать картинку", "Видео", "Создать видео", "Профиль", "Мой профиль", "Купить":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAdminFlowCancelText(txt string) bool {
+	switch strings.TrimSpace(txt) {
+	case "Отмена", "Назад":
+		return true
+	default:
+		return false
+	}
 }
 
 func parsePackageEditInput(raw string) (int64, admin.PackageInput, error) {

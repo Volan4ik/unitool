@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	signupBonusImageCredits = 2
+	signupBonusImageCredits = 1
 	signupBonusVideoCredits = 1
 )
 
