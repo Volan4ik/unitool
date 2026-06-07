@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	signupBonusImageCredits = 1
-	signupBonusVideoCredits = 1
+	signupBonusImageCredits = 3
+	signupBonusVideoCredits = 0
 )
 
 // EnsureUser upserts the user by TG ID and returns internal user id.
