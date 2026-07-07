@@ -18,6 +18,7 @@ import (
 
 	migr "unitool"
 	"unitool/internal/admin"
+	"unitool/internal/biztime"
 	"unitool/internal/config"
 	db "unitool/internal/db/generated"
 	"unitool/internal/generation"
@@ -107,6 +108,13 @@ func main() {
 	if cfg.CometKey == "" {
 		logg.Fatal().Msg("COMET_API_KEY is required")
 	}
+	businessLoc, err := biztime.LoadLocation(cfg.BusinessTimezone)
+	if err != nil {
+		logg.Fatal().Err(err).Msg("load business timezone")
+	}
+	logg.Info().
+		Str("business_timezone", businessLoc.String()).
+		Msg("business timezone configured")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -157,7 +165,7 @@ func main() {
 	if err != nil {
 		logg.Fatal().Err(err).Msg("parse ADMIN_IDS")
 	}
-	adminSvc := admin.NewService(queries)
+	adminSvc := admin.NewServiceWithBusinessLocation(queries, businessLoc)
 	pay := payments.NewService(bot.API, cfg.ProviderToken, pg.Pool, queries, payments.YooKassaOptions{
 		Enabled:   cfg.YooKassaEnabled,
 		ShopID:    cfg.YooKassaShopID,
@@ -202,6 +210,7 @@ func main() {
 		time.Duration(cfg.JobPollMs)*time.Millisecond,
 		cfg.MediaGenTimeout,
 	)
+	genSvc.SetKindTimeouts(cfg.ImageGenTimeout, cfg.VideoGenTimeout)
 	genSvc.Start(ctx)
 	var retentionSvc *retention.Service
 	if cfg.RetentionEnabled {

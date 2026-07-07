@@ -128,6 +128,26 @@ func TestGenerationOutputAndErrorsHelpers(t *testing.T) {
 	if !strings.Contains(msg, "в обработке") {
 		t.Fatalf("unexpected refund pending message: %q", msg)
 	}
+
+	msg = userFailureMessage("context deadline exceeded", false)
+	if !strings.Contains(msg, "лимит ожидания") || !strings.Contains(msg, "Попытка возвращена") {
+		t.Fatalf("unexpected timeout user message: %q", msg)
+	}
+}
+
+func TestTimeoutForJob(t *testing.T) {
+	s := NewService(nil, nil, nil, 1, time.Second, 2*time.Minute)
+	s.SetKindTimeouts(15*time.Minute, 20*time.Minute)
+
+	if got := s.timeoutForJob(db.GenerationJob{Kind: "image"}); got != 15*time.Minute {
+		t.Fatalf("unexpected image timeout: %s", got)
+	}
+	if got := s.timeoutForJob(db.GenerationJob{Kind: "video"}); got != 20*time.Minute {
+		t.Fatalf("unexpected video timeout: %s", got)
+	}
+	if got := s.timeoutForJob(db.GenerationJob{Kind: "text"}); got != 2*time.Minute {
+		t.Fatalf("unexpected fallback timeout: %s", got)
+	}
 }
 
 func TestGenerationJobFromClaimed(t *testing.T) {

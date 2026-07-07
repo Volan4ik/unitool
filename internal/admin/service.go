@@ -14,11 +14,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"unitool/internal/biztime"
 	db "unitool/internal/db/generated"
 )
 
 type Service struct {
-	Q *db.Queries
+	Q           *db.Queries
+	businessLoc *time.Location
 }
 
 type PackageInput struct {
@@ -57,7 +59,7 @@ type Stats struct {
 	TotalUsers         int64
 	Active             int64
 	Banned             int64
-	New24h             int64
+	NewToday           int64
 	New7d              int64
 	TotalGens          int64
 	PaidOrdersTotal    int64
@@ -77,7 +79,18 @@ type UsersExport struct {
 }
 
 func NewService(q *db.Queries) *Service {
-	return &Service{Q: q}
+	loc, err := biztime.LoadLocation(biztime.DefaultLocationName)
+	if err != nil {
+		loc = time.UTC
+	}
+	return NewServiceWithBusinessLocation(q, loc)
+}
+
+func NewServiceWithBusinessLocation(q *db.Queries, loc *time.Location) *Service {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return &Service{Q: q, businessLoc: loc}
 }
 
 func (s *Service) ListPackages(ctx context.Context) ([]db.Package, error) {
@@ -234,9 +247,10 @@ func (s *Service) GetStats(ctx context.Context, excludedAdminTGIDs []int64) (Sta
 	if err != nil {
 		return Stats{}, err
 	}
-	new24h, err := s.Q.CountNewUsersSince(ctx, pgtype.Timestamptz{
-		Time:  time.Now().UTC().Add(-24 * time.Hour),
-		Valid: true,
+	dayStart, dayEnd := biztime.DayBounds(time.Now(), s.businessLoc)
+	newToday, err := s.Q.CountNewUsersBetween(ctx, db.CountNewUsersBetweenParams{
+		DayStart: pgtype.Timestamptz{Time: dayStart, Valid: true},
+		DayEnd:   pgtype.Timestamptz{Time: dayEnd, Valid: true},
 	})
 	if err != nil {
 		return Stats{}, err
@@ -252,12 +266,10 @@ func (s *Service) GetStats(ctx context.Context, excludedAdminTGIDs []int64) (Sta
 	if err != nil {
 		return Stats{}, err
 	}
-	now := time.Now()
-	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	paidStats, err := s.Q.GetPaidOrdersStatsExcludingTGIDs(ctx, db.GetPaidOrdersStatsExcludingTGIDsParams{
 		ExcludedTgIds: excludedAdminTGIDs,
 		DayStart:      pgtype.Timestamptz{Time: dayStart, Valid: true},
-		DayEnd:        pgtype.Timestamptz{Time: dayStart.Add(24 * time.Hour), Valid: true},
+		DayEnd:        pgtype.Timestamptz{Time: dayEnd, Valid: true},
 	})
 	if err != nil {
 		return Stats{}, err
@@ -270,7 +282,7 @@ func (s *Service) GetStats(ctx context.Context, excludedAdminTGIDs []int64) (Sta
 		TotalUsers:         total,
 		Active:             active,
 		Banned:             banned,
-		New24h:             new24h,
+		NewToday:           newToday,
 		New7d:              new7d,
 		TotalGens:          totalGens,
 		PaidOrdersTotal:    paidStats.TotalPaidOrders,

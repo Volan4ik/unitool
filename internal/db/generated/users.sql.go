@@ -67,6 +67,25 @@ func (q *Queries) CountGenerationRequestsByUser(ctx context.Context, userID int6
 	return cnt, err
 }
 
+const countNewUsersBetween = `-- name: CountNewUsersBetween :one
+SELECT COUNT(*)::bigint AS cnt
+FROM users
+WHERE created_at >= $1::timestamptz
+  AND created_at < $2::timestamptz
+`
+
+type CountNewUsersBetweenParams struct {
+	DayStart pgtype.Timestamptz `json:"day_start"`
+	DayEnd   pgtype.Timestamptz `json:"day_end"`
+}
+
+func (q *Queries) CountNewUsersBetween(ctx context.Context, arg CountNewUsersBetweenParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countNewUsersBetween, arg.DayStart, arg.DayEnd)
+	var cnt int64
+	err := row.Scan(&cnt)
+	return cnt, err
+}
+
 const countNewUsersSince = `-- name: CountNewUsersSince :one
 SELECT COUNT(*)::bigint AS cnt
 FROM users

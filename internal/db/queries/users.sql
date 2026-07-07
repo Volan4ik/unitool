@@ -129,6 +129,12 @@ SELECT COUNT(*)::bigint AS cnt
 FROM users
 WHERE is_banned = TRUE;
 
+-- name: CountNewUsersBetween :one
+SELECT COUNT(*)::bigint AS cnt
+FROM users
+WHERE created_at >= sqlc.arg(day_start)::timestamptz
+  AND created_at < sqlc.arg(day_end)::timestamptz;
+
 -- name: CountNewUsersSince :one
 SELECT COUNT(*)::bigint AS cnt
 FROM users

@@ -416,7 +416,7 @@ func (r *Router) sendAdminStats(ctx context.Context, chatID int64) error {
 		fmt.Sprintf("Всего пользователей: %d", st.TotalUsers),
 		fmt.Sprintf("Активных за 7 дней: %d", st.Active),
 		fmt.Sprintf("В бане: %d", st.Banned),
-		fmt.Sprintf("Новых за 24 часа: %d", st.New24h),
+		fmt.Sprintf("Новых сегодня: %d", st.NewToday),
 		fmt.Sprintf("Новых за 7 дней: %d", st.New7d),
 		fmt.Sprintf("Всего генераций: %d", st.TotalGens),
 		fmt.Sprintf("Оплаты: всего %d / %d ₽, сегодня %d / %d ₽", st.PaidOrdersTotal, st.PaidAmountRubTotal, st.PaidOrdersToday, st.PaidAmountRubToday),

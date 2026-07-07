@@ -25,13 +25,15 @@ import (
 )
 
 type Service struct {
-	Bot        *tgbotapi.BotAPI
-	Q          *db.Queries
-	Prov       provider.ModelProvider
-	Workers    int
-	PollEvery  time.Duration
-	GenTimeout time.Duration
-	StaleAfter time.Duration
+	Bot             *tgbotapi.BotAPI
+	Q               *db.Queries
+	Prov            provider.ModelProvider
+	Workers         int
+	PollEvery       time.Duration
+	GenTimeout      time.Duration
+	ImageGenTimeout time.Duration
+	VideoGenTimeout time.Duration
+	StaleAfter      time.Duration
 
 	wg sync.WaitGroup
 }
@@ -70,6 +72,28 @@ func NewService(bot *tgbotapi.BotAPI, q *db.Queries, prov provider.ModelProvider
 		GenTimeout: genTimeout,
 		StaleAfter: staleAfter,
 	}
+}
+
+func (s *Service) SetKindTimeouts(imageTimeout, videoTimeout time.Duration) {
+	s.ImageGenTimeout = imageTimeout
+	s.VideoGenTimeout = videoTimeout
+}
+
+func (s *Service) timeoutForJob(job db.GenerationJob) time.Duration {
+	switch job.Kind {
+	case "image":
+		if s.ImageGenTimeout > 0 {
+			return s.ImageGenTimeout
+		}
+	case "video":
+		if s.VideoGenTimeout > 0 {
+			return s.VideoGenTimeout
+		}
+	}
+	if s.GenTimeout > 0 {
+		return s.GenTimeout
+	}
+	return 120 * time.Second
 }
 
 func (s *Service) Start(ctx context.Context) {
@@ -192,8 +216,13 @@ func (s *Service) recoverStaleRunningJobs(ctx context.Context) {
 
 func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 	t0 := time.Now()
-	ctxGen, cancel := context.WithTimeout(ctx, s.GenTimeout)
+	genTimeout := s.timeoutForJob(job)
+	ctxGen, cancel := context.WithTimeout(ctx, genTimeout)
 	defer cancel()
+	log.Printf(
+		"generation: provider start job_id=%d gen_id=%d user_id=%d chat_id=%d kind=%s model=%s attempt=%d/%d timeout=%s",
+		job.ID, job.GenerationRequestID, job.UserID, job.ChatID, job.Kind, job.Model, job.Attempts, job.MaxAttempts, genTimeout,
+	)
 
 	input := job.Prompt
 	params := map[string]any{"kind": job.Kind}
@@ -217,13 +246,17 @@ func (s *Service) processJob(ctx context.Context, job db.GenerationJob) {
 	})
 	latency := int32(time.Since(t0).Milliseconds())
 	if err != nil {
+		log.Printf(
+			"generation: provider failed job_id=%d gen_id=%d user_id=%d chat_id=%d kind=%s model=%s attempt=%d/%d latency_ms=%d timeout=%s err=%q",
+			job.ID, job.GenerationRequestID, job.UserID, job.ChatID, job.Kind, job.Model, job.Attempts, job.MaxAttempts, latency, genTimeout, err.Error(),
+		)
 		s.handleFailedAttempt(ctx, job, err, latency)
 		return
 	}
 	output := strings.TrimSpace(resp.Output)
 	log.Printf(
-		"generation: provider result job_id=%d user_id=%d chat_id=%d kind=%s output=%q",
-		job.ID, job.UserID, job.ChatID, job.Kind, shortOutput(output),
+		"generation: provider result job_id=%d gen_id=%d user_id=%d chat_id=%d kind=%s model=%s attempt=%d/%d latency_ms=%d output=%q",
+		job.ID, job.GenerationRequestID, job.UserID, job.ChatID, job.Kind, job.Model, job.Attempts, job.MaxAttempts, latency, shortOutput(output),
 	)
 
 	if err := s.sendMediaResult(ctx, job, output); err != nil {
@@ -428,8 +461,8 @@ func (s *Service) finalizeFailedSideEffects(
 		)
 	}
 	log.Printf(
-		"generation: failed permanently job_id=%d gen_id=%d user_id=%d chat_id=%d kind=%s source=%s refunded=%t err=%q",
-		jobID, genID, userID, chatID, kind, source, refundErr == nil, errText,
+		"generation: failed permanently job_id=%d gen_id=%d user_id=%d chat_id=%d kind=%s model=%s source=%s refunded=%t latency_ms=%d err=%q",
+		jobID, genID, userID, chatID, kind, model, source, refundErr == nil, latency, errText,
 	)
 
 	if !notifyUser {
@@ -913,8 +946,22 @@ func userFailureMessage(errText string, refundPending bool) string {
 		return msg
 	}
 
+	if isTimeoutError(errText) {
+		if refundPending {
+			return "Генерация не успела завершиться за лимит ожидания. Возврат попытки в обработке, попробуйте позже."
+		}
+		return "Генерация не успела завершиться за лимит ожидания. Попытка возвращена."
+	}
+
 	if refundPending {
 		return "Ошибка генерации медиа. Возврат попытки в обработке, попробуйте позже."
 	}
 	return "Ошибка генерации медиа. Попытка возвращена."
+}
+
+func isTimeoutError(errText string) bool {
+	msg := strings.ToLower(strings.TrimSpace(errText))
+	return strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "client.timeout exceeded") ||
+		strings.Contains(msg, "timeout")
 }

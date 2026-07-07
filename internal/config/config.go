@@ -35,6 +35,7 @@ type Config struct {
 	MaxWorkers        int           `envconfig:"MAX_WORKERS" default:"64"`
 	QueueBuffer       int           `envconfig:"QUEUE_BUFFER" default:"1024"`
 	AutoMigrate       bool          `envconfig:"AUTO_MIGRATE" default:"true"`
+	BusinessTimezone  string        `envconfig:"BUSINESS_TIMEZONE" default:"Europe/Moscow"`
 	CometBase         string        `envconfig:"COMET_API_BASE" default:"https://api.cometapi.com"`
 	CometKey          string        `envconfig:"COMET_API_KEY" required:"true"`
 	CometTimeout      time.Duration `envconfig:"COMET_TIMEOUT" default:"25s"`
@@ -51,6 +52,8 @@ type Config struct {
 	JobWorkers      int           `envconfig:"JOB_WORKERS" default:"4"`
 	JobPollMs       int           `envconfig:"JOB_POLL_MS" default:"700"`
 	MediaGenTimeout time.Duration `envconfig:"MEDIA_GEN_TIMEOUT" default:"120s"`
+	ImageGenTimeout time.Duration `envconfig:"IMAGE_GEN_TIMEOUT" default:"900s"`
+	VideoGenTimeout time.Duration `envconfig:"VIDEO_GEN_TIMEOUT" default:"900s"`
 	// OpenAI Moderation API
 	ModerationEnabled bool          `envconfig:"MODERATION_ENABLED" default:"false"`
 	OpenAIBase        string        `envconfig:"OPENAI_API_BASE" default:"https://api.openai.com"`

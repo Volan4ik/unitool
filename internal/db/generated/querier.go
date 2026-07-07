@@ -20,6 +20,7 @@ type Querier interface {
 	CountBannedUsers(ctx context.Context) (int64, error)
 	CountGenerationRequests(ctx context.Context) (int64, error)
 	CountGenerationRequestsByUser(ctx context.Context, userID int64) (int64, error)
+	CountNewUsersBetween(ctx context.Context, arg CountNewUsersBetweenParams) (int64, error)
 	CountNewUsersSince(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error)
 	CountUsers(ctx context.Context) (int64, error)
 	CountUsersBySourceTag(ctx context.Context) ([]CountUsersBySourceTagRow, error)
