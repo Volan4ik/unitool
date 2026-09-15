@@ -87,6 +87,18 @@ func TestInputReferencesFromParams(t *testing.T) {
 	}
 }
 
+func TestNormalizeVeoVideoModel(t *testing.T) {
+	for _, model := range []string{"veo3", "veo3.1", "veo3.1-fast", "Veo 3.1 Fast"} {
+		if got := normalizeVideoModel(model); got != "veo3.1-fast" {
+			t.Fatalf("normalizeVideoModel(%q) = %q, want %q", model, got, "veo3.1-fast")
+		}
+	}
+
+	if !isSupportedVideoModel("veo3.1-fast") {
+		t.Fatal("veo3.1-fast must be supported")
+	}
+}
+
 func TestGenerateDoubaoSeedanceVideoUsesVideosEndpoint(t *testing.T) {
 	c := New("https://api.test", "test-key", time.Second)
 	c.httpc = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
