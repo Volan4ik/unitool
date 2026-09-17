@@ -928,7 +928,19 @@ func isProviderModerationError(errText string) bool {
 		return false
 	}
 	return strings.Contains(msg, "blocked by our moderation system") ||
-		strings.Contains(msg, "moderation system when checking inputs")
+		strings.Contains(msg, "moderation system when checking inputs") ||
+		strings.Contains(msg, "prompt_block_reason=safety") ||
+		strings.Contains(msg, "prompt_block_reason=blocklist") ||
+		strings.Contains(msg, "prompt_block_reason=prohibited_content") ||
+		strings.Contains(msg, "prompt_block_reason=image_safety") ||
+		strings.Contains(msg, "finish_reason=safety") ||
+		strings.Contains(msg, "finish_reason=recitation") ||
+		strings.Contains(msg, "finish_reason=blocklist") ||
+		strings.Contains(msg, "finish_reason=prohibited_content") ||
+		strings.Contains(msg, "finish_reason=spii") ||
+		strings.Contains(msg, "finish_reason=image_safety") ||
+		strings.Contains(msg, "finish_reason=image_prohibited_content") ||
+		strings.Contains(msg, "finish_reason=image_recitation")
 }
 
 func userFailureMessage(errText string, refundPending bool) string {

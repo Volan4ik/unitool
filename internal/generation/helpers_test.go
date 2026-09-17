@@ -118,6 +118,12 @@ func TestGenerationOutputAndErrorsHelpers(t *testing.T) {
 	if isProviderModerationError("network timeout") {
 		t.Fatal("unexpected moderation detection")
 	}
+	if !isProviderModerationError("gemini image response has no final inline image: candidate_0_finish_reason=IMAGE_SAFETY") {
+		t.Fatal("expected Gemini image moderation detection")
+	}
+	if isProviderModerationError("gemini image response has no final inline image: candidate_0_finish_reason=NO_IMAGE") {
+		t.Fatal("unexpected moderation detection for Gemini NO_IMAGE")
+	}
 
 	msg := userFailureMessage(moderationErr, false)
 	if !strings.Contains(msg, promptRulesURL) || !strings.Contains(msg, "Попытка возвращена") {

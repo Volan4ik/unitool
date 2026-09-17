@@ -354,23 +354,41 @@ type geminiGenerationConfig struct {
 	ResponseModalities []string `json:"responseModalities,omitempty"`
 }
 
+type geminiSafetyRating struct {
+	Category    string `json:"category"`
+	Probability string `json:"probability"`
+	Blocked     bool   `json:"blocked"`
+}
+
+type geminiResponsePart struct {
+	Text       string `json:"text"`
+	Thought    bool   `json:"thought"`
+	InlineData struct {
+		MimeType string `json:"mimeType"`
+		Data     string `json:"data"`
+	} `json:"inlineData"`
+	InlineDataAlt struct {
+		MimeType string `json:"mime_type"`
+		Data     string `json:"data"`
+	} `json:"inline_data"`
+}
+
+type geminiCandidate struct {
+	Content struct {
+		Role  string               `json:"role"`
+		Parts []geminiResponsePart `json:"parts"`
+	} `json:"content"`
+	FinishReason  string               `json:"finishReason"`
+	FinishMessage string               `json:"finishMessage"`
+	SafetyRatings []geminiSafetyRating `json:"safetyRatings"`
+}
+
 type geminiGenerateContentResp struct {
-	Candidates []struct {
-		Content struct {
-			Role  string `json:"role"`
-			Parts []struct {
-				Text       string `json:"text"`
-				InlineData struct {
-					MimeType string `json:"mimeType"`
-					Data     string `json:"data"`
-				} `json:"inlineData"`
-				InlineDataAlt struct {
-					MimeType string `json:"mime_type"`
-					Data     string `json:"data"`
-				} `json:"inline_data"`
-			} `json:"parts"`
-		} `json:"content"`
-	} `json:"candidates"`
+	Candidates     []geminiCandidate `json:"candidates"`
+	PromptFeedback struct {
+		BlockReason   string               `json:"blockReason"`
+		SafetyRatings []geminiSafetyRating `json:"safetyRatings"`
+	} `json:"promptFeedback"`
 	UsageMetadata struct {
 		PromptTokenCount     int `json:"promptTokenCount"`
 		CandidatesTokenCount int `json:"candidatesTokenCount"`
@@ -703,7 +721,19 @@ func isGPTImageModel(model string) bool {
 }
 
 func isKlingImageModel(model string) bool {
-	return strings.EqualFold(strings.TrimSpace(model), "kling-v2")
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "kling_image", "kling-v2":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeKlingImageModel(model string) string {
+	if isKlingImageModel(model) {
+		return "kling_image"
+	}
+	return strings.TrimSpace(model)
 }
 
 func isGeminiNativeImageModel(model string) bool {
@@ -1210,9 +1240,10 @@ func stringValue(raw any) string {
 }
 
 func (c *Client) generateKlingImage(ctx context.Context, model string, prompt string, refs []string) (provider.ModelResponse, error) {
+	model = normalizeKlingImageModel(model)
 	payload := klingImageCreateReq{
 		Prompt:    prompt,
-		ModelName: strings.TrimSpace(model),
+		ModelName: model,
 	}
 	normalizedRefs := make([]string, 0, len(refs))
 	for _, ref := range refs {
@@ -1394,7 +1425,7 @@ func (c *Client) generateImageViaGemini(ctx context.Context, model string, promp
 
 	output := firstGeminiImageDataURI(out)
 	if output == "" {
-		return provider.ModelResponse{}, errors.New("gemini image response has no inline image")
+		return provider.ModelResponse{}, geminiMissingImageError(out)
 	}
 	return provider.ModelResponse{
 		Output: output,
@@ -1616,8 +1647,12 @@ func splitDataImageURI(raw string) (string, string, bool) {
 }
 
 func firstGeminiImageDataURI(out geminiGenerateContentResp) string {
+	var output string
 	for _, candidate := range out.Candidates {
 		for _, part := range candidate.Content.Parts {
+			if part.Thought {
+				continue
+			}
 			mime := strings.TrimSpace(part.InlineData.MimeType)
 			data := strings.TrimSpace(part.InlineData.Data)
 			if mime == "" || data == "" {
@@ -1625,11 +1660,46 @@ func firstGeminiImageDataURI(out geminiGenerateContentResp) string {
 				data = strings.TrimSpace(part.InlineDataAlt.Data)
 			}
 			if mime != "" && data != "" {
-				return fmt.Sprintf("data:%s;base64,%s", mime, data)
+				output = fmt.Sprintf("data:%s;base64,%s", mime, data)
 			}
 		}
 	}
-	return ""
+	return output
+}
+
+func geminiMissingImageError(out geminiGenerateContentResp) error {
+	details := make([]string, 0, len(out.Candidates)+2)
+	if reason := strings.TrimSpace(out.PromptFeedback.BlockReason); reason != "" {
+		details = append(details, "prompt_block_reason="+reason)
+	}
+	if categories := blockedGeminiSafetyCategories(out.PromptFeedback.SafetyRatings); categories != "" {
+		details = append(details, "prompt_safety_categories="+categories)
+	}
+	for i, candidate := range out.Candidates {
+		if reason := strings.TrimSpace(candidate.FinishReason); reason != "" {
+			details = append(details, fmt.Sprintf("candidate_%d_finish_reason=%s", i, reason))
+		}
+		if message := strings.TrimSpace(candidate.FinishMessage); message != "" {
+			details = append(details, fmt.Sprintf("candidate_%d_finish_message=%q", i, message))
+		}
+		if categories := blockedGeminiSafetyCategories(candidate.SafetyRatings); categories != "" {
+			details = append(details, fmt.Sprintf("candidate_%d_safety_categories=%s", i, categories))
+		}
+	}
+	if len(details) == 0 {
+		return errors.New("gemini image response has no final inline image")
+	}
+	return fmt.Errorf("gemini image response has no final inline image: %s", strings.Join(details, " "))
+}
+
+func blockedGeminiSafetyCategories(ratings []geminiSafetyRating) string {
+	categories := make([]string, 0, len(ratings))
+	for _, rating := range ratings {
+		if rating.Blocked && strings.TrimSpace(rating.Category) != "" {
+			categories = append(categories, strings.TrimSpace(rating.Category))
+		}
+	}
+	return strings.Join(categories, ",")
 }
 
 func extractFirstDataImageURI(text string) string {

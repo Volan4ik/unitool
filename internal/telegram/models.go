@@ -18,7 +18,7 @@ var modelRegistry = map[string][]ModelOption{
 	"image": {
 		{UIName: "GPT Image 2", ProviderID: "gpt-image-2", IsDefault: true},
 		{UIName: "Nano Banana", ProviderID: "gemini-3.1-flash-image-preview"},
-		{UIName: "Kling", ProviderID: "kling-v2"},
+		{UIName: "Kling", ProviderID: "kling_image"},
 	},
 	"video": {
 		{UIName: "Sora 2", ProviderID: "sora-2", IsDefault: true},

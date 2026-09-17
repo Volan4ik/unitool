@@ -56,7 +56,7 @@ func TestBuildPromptWithReferences(t *testing.T) {
 
 func TestReferenceFileIDsForModeModel(t *testing.T) {
 	t.Run("image keeps all references", func(t *testing.T) {
-		refs, warning := referenceFileIDsForModeModel("image", "kling-v2", []string{"a", "b"})
+		refs, warning := referenceFileIDsForModeModel("image", "kling_image", []string{"a", "b"})
 		if warning != "" || len(refs) != 2 {
 			t.Fatalf("unexpected refs=%v warning=%q", refs, warning)
 		}

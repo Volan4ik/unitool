@@ -87,6 +87,17 @@ func TestInputReferencesFromParams(t *testing.T) {
 	}
 }
 
+func TestNormalizeKlingImageModel(t *testing.T) {
+	for _, model := range []string{"kling_image", "Kling_Image", "kling-v2"} {
+		if got := normalizeKlingImageModel(model); got != "kling_image" {
+			t.Fatalf("normalizeKlingImageModel(%q) = %q, want %q", model, got, "kling_image")
+		}
+		if !isKlingImageModel(model) {
+			t.Fatalf("isKlingImageModel(%q) = false, want true", model)
+		}
+	}
+}
+
 func TestNormalizeVeoVideoModel(t *testing.T) {
 	for _, model := range []string{"veo3", "veo3.1", "veo3.1-fast", "Veo 3.1 Fast"} {
 		if got := normalizeVideoModel(model); got != "veo3.1-fast" {
@@ -299,6 +310,105 @@ func TestGenerateImageViaImagesEndpointKeepsURLResponses(t *testing.T) {
 	}
 	if got.Meta["source"] != "images/generations" {
 		t.Fatalf("unexpected meta: %+v", got.Meta)
+	}
+}
+
+func TestGenerateGeminiImageUsesFinalNonThoughtImage(t *testing.T) {
+	c := New("https://api.test", "test-key", time.Second)
+	c.httpc = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1beta/models/gemini-3.1-flash-image-preview:generateContent" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("unexpected authorization header: %q", got)
+		}
+		var payload geminiGenerateContentReq
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if len(payload.Contents) != 1 || len(payload.Contents[0].Parts) != 2 {
+			t.Fatalf("unexpected contents: %+v", payload.Contents)
+		}
+		if payload.Contents[0].Parts[1].InlineData == nil || payload.Contents[0].Parts[1].InlineData.Data != "QUJD" {
+			t.Fatalf("unexpected image reference: %+v", payload.Contents[0].Parts[1])
+		}
+		if len(payload.GenerationConfig.ResponseModalities) != 1 || payload.GenerationConfig.ResponseModalities[0] != "IMAGE" {
+			t.Fatalf("unexpected response modalities: %+v", payload.GenerationConfig.ResponseModalities)
+		}
+
+		body := []byte(`{
+			"candidates": [{
+				"content": {"parts": [
+					{"inlineData":{"mimeType":"image/jpeg","data":"VEhPVUdIVA=="},"thought":true},
+					{"inlineData":{"mimeType":"image/png","data":"RklSU1Q="}},
+					{"inlineData":{"mimeType":"image/png","data":"RklOQUw="},"thought":false}
+				]},
+				"finishReason":"STOP"
+			}],
+			"usageMetadata":{"totalTokenCount":321}
+		}`)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Request:    r,
+		}, nil
+	})}
+
+	got, err := c.Generate(context.Background(), provider.ModelRequest{
+		Input: "edit",
+		Model: "gemini-3.1-flash-image-preview",
+		Params: map[string]any{
+			"kind":             "image",
+			"input_references": []string{"data:image/jpeg;base64,QUJD"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected err=%v", err)
+	}
+	if got.Output != "data:image/png;base64,RklOQUw=" {
+		t.Fatalf("unexpected output: %q", got.Output)
+	}
+	if got.Tokens != 321 {
+		t.Fatalf("unexpected tokens: %d", got.Tokens)
+	}
+}
+
+func TestGenerateGeminiImageReportsMissingImageReason(t *testing.T) {
+	c := New("https://api.test", "test-key", time.Second)
+	c.httpc = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := []byte(`{
+			"candidates": [{
+				"content": {"parts": []},
+				"finishReason":"IMAGE_SAFETY",
+				"finishMessage":"Image was blocked",
+				"safetyRatings":[{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","blocked":true}]
+			}]
+		}`)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Request:    r,
+		}, nil
+	})}
+
+	_, err := c.Generate(context.Background(), provider.ModelRequest{
+		Input:  "draw",
+		Model:  "gemini-3.1-flash-image-preview",
+		Params: map[string]any{"kind": "image"},
+	})
+	if err == nil {
+		t.Fatal("expected missing image error")
+	}
+	for _, want := range []string{
+		"candidate_0_finish_reason=IMAGE_SAFETY",
+		`candidate_0_finish_message="Image was blocked"`,
+		"candidate_0_safety_categories=HARM_CATEGORY_DANGEROUS_CONTENT",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not contain %q", err, want)
+		}
 	}
 }
 
